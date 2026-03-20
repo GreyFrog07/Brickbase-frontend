@@ -400,11 +400,14 @@ export default function AddPropertyScreen() {
       setGatedProperty(property.gatedProperty);
       setPropertyAge(property.propertyAge?.toString() || '');
       
+      // Load cover photo index
+      setCoverPhotoIndex(property.coverPhotoIndex ?? 0);
+
       // Load photos
       if (property.propertyPhotos && property.propertyPhotos.length > 0) {
         const loadedPhotos: PhotoData[] = property.propertyPhotos.map(photo => ({
           uri: photo,
-          base64: photo.startsWith('data:') ? photo.split(',')[1] : undefined,
+          base64: undefined,
           location: property.latitude && property.longitude ? {
             coords: {
               latitude: property.latitude,
@@ -419,6 +422,16 @@ export default function AddPropertyScreen() {
           } as Location.LocationObject : undefined,
         }));
         setPhotos(loadedPhotos);
+      }
+
+      // Load videos
+      if (property.propertyVideos && property.propertyVideos.length > 0) {
+        const loadedVideos: VideoData[] = property.propertyVideos.map(video => ({
+          uri: video,
+          base64: undefined,
+          thumbnail: undefined,
+        }));
+        setVideos(loadedVideos);
       }
     } catch (error) {
       console.error('Error loading property:', error);
@@ -747,84 +760,143 @@ export default function AddPropertyScreen() {
   };
 
   // Upload photos to Supabase Storage via multipart FormData (no base64 overhead)
+  // In edit mode, existing photos are signed URLs (http) — skip re-uploading them.
   const uploadPhotosToStorage = async (): Promise<string[]> => {
     if (photos.length === 0) return [];
 
-    const formData = new FormData();
-    photos.forEach((photo, index) => {
-      formData.append('files', {
-        uri: photo.uri,
-        type: 'image/jpeg',
-        name: `photo_${index}.jpg`,
-      } as any);
+    // Separate new local files from existing server URLs
+    const newPhotos: { idx: number; photo: PhotoData }[] = [];
+    photos.forEach((photo, idx) => {
+      if (!photo.uri.startsWith('http')) {
+        newPhotos.push({ idx, photo });
+      }
     });
 
-    const response = await api.post('/upload/batch/photos', formData, {
-      headers: { 'Content-Type': 'multipart/form-data' },
-    });
-    const { urls, failed } = response.data;
+    // Upload only new photos
+    let newPaths: string[] = [];
+    if (newPhotos.length > 0) {
+      const formData = new FormData();
+      newPhotos.forEach(({ photo }, i) => {
+        formData.append('files', {
+          uri: photo.uri,
+          type: 'image/jpeg',
+          name: `photo_${i}.jpg`,
+        } as any);
+      });
 
-    if (failed.length > 0) {
-      console.warn(`${failed.length} photos failed to upload to storage`);
+      const response = await api.post('/upload/batch/photos', formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      });
+      const { urls, failed } = response.data;
+      if (failed.length > 0) {
+        console.warn(`${failed.length} photos failed to upload to storage`);
+      }
+      newPaths = urls;
     }
 
-    return urls.filter((url: string) => url && url.length > 0);
+    // Rebuild list in original order: existing URLs as-is, new uploads by position
+    let newIdx = 0;
+    return photos
+      .map((photo) => {
+        if (photo.uri.startsWith('http')) return photo.uri;
+        return newPaths[newIdx++] || '';
+      })
+      .filter(url => url && url.length > 0);
   };
 
   // Upload videos to Supabase Storage via multipart FormData (no base64 overhead)
+  // In edit mode, existing videos are signed URLs (http) — skip re-uploading them.
   const uploadVideosToStorage = async (): Promise<string[]> => {
     if (videos.length === 0) return [];
 
-    const formData = new FormData();
-    videos.forEach((video, index) => {
-      formData.append('files', {
-        uri: video.uri,
-        type: 'video/mp4',
-        name: `video_${index}.mp4`,
-      } as any);
+    // Separate new local files from existing server URLs
+    const newVideos: { idx: number; video: VideoData }[] = [];
+    videos.forEach((video, idx) => {
+      if (!video.uri.startsWith('http')) {
+        newVideos.push({ idx, video });
+      }
     });
 
-    const response = await api.post('/upload/batch/videos', formData, {
-      headers: { 'Content-Type': 'multipart/form-data' },
-    });
-    const { urls, failed } = response.data;
+    // Upload only new videos
+    let newPaths: string[] = [];
+    if (newVideos.length > 0) {
+      const formData = new FormData();
+      newVideos.forEach(({ video }, i) => {
+        formData.append('files', {
+          uri: video.uri,
+          type: 'video/mp4',
+          name: `video_${i}.mp4`,
+        } as any);
+      });
 
-    if (failed.length > 0) {
-      console.warn(`${failed.length} videos failed to upload to storage`);
+      const response = await api.post('/upload/batch/videos', formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      });
+      const { urls, failed } = response.data;
+      if (failed.length > 0) {
+        console.warn(`${failed.length} videos failed to upload to storage`);
+      }
+      newPaths = urls;
     }
 
-    return urls.filter((url: string) => url && url.length > 0);
+    // Rebuild list in original order: existing URLs as-is, new uploads by position
+    let newIdx = 0;
+    return videos
+      .map((video) => {
+        if (video.uri.startsWith('http')) return video.uri;
+        return newPaths[newIdx++] || '';
+      })
+      .filter(url => url && url.length > 0);
   };
 
   // Upload important files to Supabase Storage via multipart FormData
+  // In edit mode, existing files have url/path from server — skip re-uploading them.
   const uploadFilesToStorage = async (): Promise<{ name: string; path: string; mimeType?: string }[]> => {
     if (importantFiles.length === 0) return [];
 
-    const formData = new FormData();
-    importantFiles.forEach((file, index) => {
-      formData.append('files', {
-        uri: file.uri,
-        type: file.mimeType || 'application/octet-stream',
-        name: file.name || `file_${index}`,
-      } as any);
+    // Separate existing server files from new local files
+    const existingFiles: { idx: number; file: ImportantFile }[] = [];
+    const newFiles: { idx: number; file: ImportantFile }[] = [];
+    importantFiles.forEach((file, idx) => {
+      if (file.url || file.path) {
+        existingFiles.push({ idx, file });
+      } else {
+        newFiles.push({ idx, file });
+      }
     });
 
-    const response = await api.post('/upload/batch/files', formData, {
-      headers: { 'Content-Type': 'multipart/form-data' },
-    });
-    const { urls: paths, failed } = response.data;
+    // Upload only new files
+    let newPaths: string[] = [];
+    if (newFiles.length > 0) {
+      const formData = new FormData();
+      newFiles.forEach(({ file }, i) => {
+        formData.append('files', {
+          uri: file.uri,
+          type: file.mimeType || 'application/octet-stream',
+          name: file.name || `file_${i}`,
+        } as any);
+      });
 
-    if (failed.length > 0) {
-      console.warn(`${failed.length} files failed to upload to storage`);
+      const response = await api.post('/upload/batch/files', formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      });
+      const { urls: paths, failed } = response.data;
+      if (failed.length > 0) {
+        console.warn(`${failed.length} files failed to upload to storage`);
+      }
+      newPaths = paths;
     }
 
-    // Return file metadata with storage paths
+    // Rebuild list in original order
+    let newIdx = 0;
     return importantFiles
-      .map((file, index) => ({
-        name: file.name,
-        path: paths[index] || '',
-        mimeType: file.mimeType,
-      }))
+      .map((file) => {
+        if (file.url || file.path) {
+          // Existing file — preserve its server path/url
+          return { name: file.name, path: file.path || file.url || '', mimeType: file.mimeType };
+        }
+        return { name: file.name, path: newPaths[newIdx++] || '', mimeType: file.mimeType };
+      })
       .filter(f => f.path.length > 0);
   };
 
