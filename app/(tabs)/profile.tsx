@@ -8,13 +8,19 @@ import {
   ScrollView,
   Image,
   ActivityIndicator,
+  Linking,
 } from 'react-native';
+
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as ImagePicker from 'expo-image-picker';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../../contexts/AuthContext';
 import DeleteAccountModal from '../../components/DeleteAccountModal';
 import api from '../../lib/api';
+
+const SUPPORT_PHONE = '919311730107';
+const PRIVACY_POLICY_URL = 'https://brickbase.co.in/privacy-policy/';
+const TERMS_URL = 'https://brickbase.co.in/terms-and-conditions/';
 
 export default function ProfileScreen() {
   const { user, signOut, updateUser } = useAuth();
@@ -83,6 +89,51 @@ export default function ProfileScreen() {
     } finally {
       setUploading(false);
     }
+  };
+
+  const handleHelpAndSupport = () => {
+    Alert.alert(
+      'Contact Us',
+      'How can we help you?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Give Feedback',
+          onPress: () => openWhatsApp("Hey I'm contacting regarding BrickBase and would like to provide feedback on "),
+        },
+        {
+          text: 'Ask for Help',
+          onPress: () => openWhatsApp("Hey I'm contacting regarding BrickBase and would like help on "),
+        },
+      ]
+    );
+  };
+
+  const openWhatsApp = async (text: string) => {
+    const url = `https://wa.me/${SUPPORT_PHONE}?text=${encodeURIComponent(text)}`;
+    const canOpen = await Linking.canOpenURL(url);
+    if (canOpen) {
+      await Linking.openURL(url);
+    } else {
+      Alert.alert('WhatsApp not available', 'Please contact us at support@brickbase.co.in');
+    }
+  };
+
+  const handleOpenUrl = async (url: string) => {
+    const canOpen = await Linking.canOpenURL(url);
+    if (canOpen) {
+      await Linking.openURL(url);
+    } else {
+      Alert.alert('Error', 'Unable to open this link');
+    }
+  };
+
+  const handleAbout = () => {
+    Alert.alert(
+      'BrickBase',
+      'Version 1.0.0\n\nA property inventory management app for real estate professionals.\n\n© 2026 BrickBase. All rights reserved.',
+      [{ text: 'OK' }]
+    );
   };
 
   // Format phone number for display
@@ -170,15 +221,7 @@ export default function ProfileScreen() {
 
         {/* Menu Items */}
         <View style={styles.menuSection}>
-          <TouchableOpacity style={styles.menuItem}>
-            <View style={styles.menuItemLeft}>
-              <Ionicons name="settings-outline" size={24} color="#fff" />
-              <Text style={styles.menuItemText}>Settings</Text>
-            </View>
-            <Ionicons name="chevron-forward" size={24} color="#666" />
-          </TouchableOpacity>
-
-          <TouchableOpacity style={styles.menuItem}>
+          <TouchableOpacity style={styles.menuItem} onPress={handleHelpAndSupport}>
             <View style={styles.menuItemLeft}>
               <Ionicons name="help-circle-outline" size={24} color="#fff" />
               <Text style={styles.menuItemText}>Help & Support</Text>
@@ -186,7 +229,7 @@ export default function ProfileScreen() {
             <Ionicons name="chevron-forward" size={24} color="#666" />
           </TouchableOpacity>
 
-          <TouchableOpacity style={styles.menuItem}>
+          <TouchableOpacity style={styles.menuItem} onPress={() => handleOpenUrl(PRIVACY_POLICY_URL)}>
             <View style={styles.menuItemLeft}>
               <Ionicons name="document-text-outline" size={24} color="#fff" />
               <Text style={styles.menuItemText}>Privacy Policy</Text>
@@ -194,7 +237,7 @@ export default function ProfileScreen() {
             <Ionicons name="chevron-forward" size={24} color="#666" />
           </TouchableOpacity>
 
-          <TouchableOpacity style={styles.menuItem}>
+          <TouchableOpacity style={styles.menuItem} onPress={() => handleOpenUrl(TERMS_URL)}>
             <View style={styles.menuItemLeft}>
               <Ionicons name="clipboard-outline" size={24} color="#fff" />
               <Text style={styles.menuItemText}>Terms & Conditions</Text>
@@ -202,7 +245,7 @@ export default function ProfileScreen() {
             <Ionicons name="chevron-forward" size={24} color="#666" />
           </TouchableOpacity>
 
-          <TouchableOpacity style={styles.menuItem}>
+          <TouchableOpacity style={styles.menuItem} onPress={handleAbout}>
             <View style={styles.menuItemLeft}>
               <Ionicons name="information-circle-outline" size={24} color="#fff" />
               <Text style={styles.menuItemText}>About</Text>
