@@ -8,6 +8,8 @@ const CACHE_KEYS = {
   PROPERTY_IMAGES: 'cached_property_images_',
 };
 
+export const MAX_RETRIES = 5;
+
 // Flag to track if new property was added (triggers refresh)
 let newPropertyAdded = false;
 

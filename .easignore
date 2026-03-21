@@ -1,0 +1,40 @@
+# Dependencies (EAS installs these during build)
+node_modules/
+
+# Native build output (EAS generates this)
+android/
+ios/
+
+# Expo cache
+.expo/
+
+# Metro cache
+.metro-cache/
+
+# IDE
+.idea/
+.vscode/
+
+# Claude
+.claude/
+
+# Audit files
+audit/
+
+# Git
+.git/
+
+# Build artifacts
+dist/
+web-build/
+
+# Debug logs
+npm-debug.*
+yarn-debug.*
+yarn-error.*
+
+# macOS
+.DS_Store
+
+# Environment (should use EAS environment variables)
+.env*.local

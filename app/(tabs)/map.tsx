@@ -31,7 +31,7 @@ import {
   resetRefreshFlag,
 } from '../../lib/cache';
 // Platform-specific map component - Metro resolves to .web.tsx or .native.tsx
-import NativeMapView from '../../components/map/MapViewComponent';
+import NativeMapView from '../../components/map/MapViewComponent.native';
 
 const { width, height } = Dimensions.get('window');
 
