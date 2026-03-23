@@ -13,6 +13,7 @@ import {
   Platform,
   ActivityIndicator,
 } from 'react-native';
+import * as Clipboard from 'expo-clipboard';
 import { Ionicons } from '@expo/vector-icons';
 import { Property } from '../types/property';
 import { File, Paths } from 'expo-file-system/next';
@@ -217,8 +218,8 @@ export default function WhatsAppShareModal({ visible, property, onClose }: Whats
         return;
       }
 
+      // Download all selected media to cache
       if (hasMedia) {
-        // Download all selected media to cache
         const photoFiles = await Promise.all(
           chosenPhotos.map((url, i) => downloadMediaToCache(url, i, 'photo'))
         );
@@ -228,45 +229,45 @@ export default function WhatsAppShareModal({ visible, property, onClose }: Whats
         fileUris = [...photoFiles, ...videoFiles];
       }
 
-      if (RNShare) {
-        // ── Native build: single share popup ──
-        // Media + text as caption in one go, or text-only if no media
+      // Copy text to clipboard first
+      if (hasText) {
+        await Clipboard.setStringAsync(shareText);
+      }
+
+      // Show alert, then open share sheet on dismiss
+      const openShareSheet = async () => {
         try {
-          if (fileUris.length > 0) {
-            await RNShare.open({
-              urls: fileUris,
-              message: hasText ? shareText : undefined,
-            });
+          if (RNShare && fileUris.length > 0) {
+            await RNShare.open({ urls: fileUris });
+          } else if (fileUris.length > 0) {
+            const isAvailable = await Sharing.isAvailableAsync();
+            if (isAvailable) {
+              const firstFile = fileUris[0];
+              const isVideo = firstFile.includes('_video_');
+              await Sharing.shareAsync(firstFile, {
+                mimeType: isVideo ? 'video/mp4' : 'image/jpeg',
+              });
+            }
           } else if (hasText) {
             await Share.share({ message: shareText });
           }
         } catch (err: any) {
-          if (err.message !== 'User did not share') throw err;
-        }
-      } else {
-        // ── Expo Go fallback: max 2 popups ──
-        if (hasText) {
-          await Share.share({ message: shareText });
-        }
-        if (fileUris.length > 0) {
-          const isAvailable = await Sharing.isAvailableAsync();
-          if (isAvailable) {
-            const firstFile = fileUris[0];
-            const isVideo = firstFile.includes('_video_');
-            await Sharing.shareAsync(firstFile, {
-              mimeType: isVideo ? 'video/mp4' : 'image/jpeg',
-            });
-            if (fileUris.length > 1) {
-              Alert.alert(
-                'Expo Go Limitation',
-                `Only the first file was shared. Use a native dev build to share all ${fileUris.length} files at once.`
-              );
-            }
+          if (err.message !== 'User did not share' && !err.message?.includes('cancel')) {
+            throw err;
           }
         }
-      }
+        onClose();
+      };
 
-      onClose();
+      if (hasMedia && hasText) {
+        Alert.alert(
+          'Details Copied',
+          'Property details have been copied to your clipboard. You can paste them as a caption when WhatsApp opens.',
+          [{ text: 'Continue', onPress: () => openShareSheet() }],
+        );
+      } else {
+        await openShareSheet();
+      }
     } catch (error: any) {
       console.error('Error sharing:', error);
       if (error.message !== 'User did not share' && !error.message?.includes('cancel')) {
