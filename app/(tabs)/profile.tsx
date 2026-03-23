@@ -11,11 +11,12 @@ import {
   Linking,
 } from 'react-native';
 
-import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as ImagePicker from 'expo-image-picker';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../../contexts/AuthContext';
 import DeleteAccountModal from '../../components/DeleteAccountModal';
+import VoiceFeedbackButton from '../../components/VoiceFeedbackButton';
 import api from '../../lib/api';
 
 const SUPPORT_PHONE = '919311730107';
@@ -136,7 +137,6 @@ export default function ProfileScreen() {
     );
   };
 
-  // Format phone number for display
   const formatPhoneNumber = () => {
     if (user?.phone) {
       const countryCode = user.countryCode || '+91';
@@ -146,7 +146,7 @@ export default function ProfileScreen() {
   };
 
   return (
-    <SafeAreaView style={styles.container} edges={['top', 'left', 'right']}>
+    <View style={styles.container}>
       <ScrollView
         style={styles.scrollView}
         contentContainerStyle={[
@@ -155,7 +155,7 @@ export default function ProfileScreen() {
         ]}
         showsVerticalScrollIndicator={false}
       >
-        {/* Profile Header */}
+        {/* Profile Header — horizontal layout */}
         <View style={styles.header}>
           <TouchableOpacity
             style={styles.avatarContainer}
@@ -163,61 +163,66 @@ export default function ProfileScreen() {
             disabled={uploading}
           >
             {uploading ? (
-              <ActivityIndicator size="large" color="#4CAF50" />
+              <ActivityIndicator size="small" color="#fff" />
             ) : user?.profilePhotoUrl ? (
               <Image
                 source={{ uri: user.profilePhotoUrl }}
                 style={styles.avatarImage}
               />
             ) : (
-              <Ionicons name="person" size={48} color="#fff" />
+              <Ionicons name="person" size={36} color="#666" />
             )}
           </TouchableOpacity>
-          <TouchableOpacity onPress={handlePickProfilePhoto} disabled={uploading}>
-            <Text style={styles.changePhotoText}>
-              {uploading ? 'Uploading...' : user?.profilePhotoUrl ? 'Change Photo' : 'Add Photo'}
-            </Text>
-          </TouchableOpacity>
 
-          {/* User Name */}
-          {user?.name && (
-            <Text style={styles.userName}>{user.name}</Text>
-          )}
+          <View style={styles.headerInfo}>
+            {user?.name && (
+              <Text style={styles.userName} numberOfLines={1}>{user.name}</Text>
+            )}
 
-          {/* Phone Number - Above Email */}
-          {formatPhoneNumber() && (
-            <View style={styles.contactRow}>
-              <Ionicons name="call-outline" size={18} color="#4CAF50" />
-              <Text style={styles.phoneText}>{formatPhoneNumber()}</Text>
-            </View>
-          )}
+            {formatPhoneNumber() && (
+              <View style={styles.contactRow}>
+                <Ionicons name="call-outline" size={14} color="#666" />
+                <Text style={styles.infoText}>{formatPhoneNumber()}</Text>
+              </View>
+            )}
 
-          {/* Email */}
-          {user?.email && (
-            <View style={styles.contactRow}>
-              <Ionicons name="mail-outline" size={18} color="#4CAF50" />
-              <Text style={styles.emailText}>{user.email}</Text>
-            </View>
-          )}
+            {user?.email && (
+              <View style={styles.contactRow}>
+                <Ionicons name="mail-outline" size={14} color="#666" />
+                <Text style={styles.infoText} numberOfLines={1}>{user.email}</Text>
+              </View>
+            )}
 
-          {/* Firm Name */}
-          {user?.firmName && (
-            <View style={styles.contactRow}>
-              <Ionicons name="business-outline" size={18} color="#666" />
-              <Text style={styles.firmText}>{user.firmName}</Text>
-            </View>
-          )}
+            {(user?.firmName || user?.city) && (
+              <View style={styles.contactRow}>
+                {user?.firmName && (
+                  <>
+                    <Ionicons name="business-outline" size={14} color="#444" />
+                    <Text style={styles.secondaryText}>{user.firmName}</Text>
+                  </>
+                )}
+                {user?.firmName && user?.city && (
+                  <Text style={styles.secondaryText}>·</Text>
+                )}
+                {user?.city && (
+                  <>
+                    <Ionicons name="location-outline" size={14} color="#444" />
+                    <Text style={styles.secondaryText}>{user.city}</Text>
+                  </>
+                )}
+              </View>
+            )}
 
-          {/* City */}
-          {user?.city && (
-            <View style={styles.contactRow}>
-              <Ionicons name="location-outline" size={18} color="#666" />
-              <Text style={styles.cityText}>{user.city}</Text>
-            </View>
-          )}
-
-          <Text style={styles.label}>Account</Text>
+            <TouchableOpacity onPress={handlePickProfilePhoto} disabled={uploading}>
+              <Text style={styles.changePhotoText}>
+                {uploading ? 'Uploading...' : user?.profilePhotoUrl ? 'Change Photo' : 'Add Photo'}
+              </Text>
+            </TouchableOpacity>
+          </View>
         </View>
+
+        {/* Voice Feedback */}
+        <VoiceFeedbackButton />
 
         {/* Menu Items */}
         <View style={styles.menuSection}>
@@ -277,7 +282,7 @@ export default function ProfileScreen() {
         visible={showDeleteModal}
         onClose={() => setShowDeleteModal(false)}
       />
-    </SafeAreaView>
+    </View>
   );
 }
 
@@ -293,69 +298,58 @@ const styles = StyleSheet.create({
     padding: 16,
   },
   header: {
-    alignItems: 'center',
-    paddingVertical: 24,
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 14,
+    paddingVertical: 16,
     borderBottomWidth: 1,
-    borderBottomColor: '#333',
-    marginBottom: 24,
+    borderBottomColor: '#1a1a1a',
+    marginBottom: 20,
   },
   avatarContainer: {
-    width: 96,
-    height: 96,
-    borderRadius: 48,
+    width: 84,
+    height: 84,
+    borderRadius: 14,
     backgroundColor: '#1a1a1a',
     justifyContent: 'center',
     alignItems: 'center',
-    marginBottom: 16,
-    borderWidth: 2,
+    borderWidth: 1,
     borderColor: '#333',
     overflow: 'hidden',
   },
   avatarImage: {
-    width: 96,
-    height: 96,
-    borderRadius: 48,
+    width: 84,
+    height: 84,
+    borderRadius: 14,
   },
-  changePhotoText: {
-    color: '#999',
-    fontSize: 13,
-    marginBottom: 16,
+  headerInfo: {
+    flex: 1,
+    gap: 2,
+    maxHeight: 84,
+    justifyContent: 'center',
   },
   userName: {
     color: '#fff',
-    fontSize: 22,
+    fontSize: 17,
     fontWeight: 'bold',
-    marginBottom: 12,
   },
   contactRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
-    marginBottom: 8,
+    gap: 5,
   },
-  phoneText: {
-    color: '#fff',
-    fontSize: 16,
-    fontWeight: '600',
-  },
-  emailText: {
-    color: '#fff',
-    fontSize: 16,
-  },
-  firmText: {
+  infoText: {
     color: '#999',
-    fontSize: 14,
-  },
-  cityText: {
-    color: '#999',
-    fontSize: 14,
-  },
-  label: {
-    color: '#666',
     fontSize: 12,
-    marginTop: 8,
-    textTransform: 'uppercase',
-    letterSpacing: 1,
+  },
+  secondaryText: {
+    color: '#666',
+    fontSize: 11,
+  },
+  changePhotoText: {
+    color: '#666',
+    fontSize: 11,
+    marginTop: 2,
   },
   menuSection: {
     gap: 8,
