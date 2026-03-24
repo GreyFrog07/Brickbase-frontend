@@ -15,8 +15,8 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as ImagePicker from 'expo-image-picker';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../../contexts/AuthContext';
-import DeleteAccountModal from '../../components/DeleteAccountModal';
-import VoiceFeedbackButton from '../../components/VoiceFeedbackButton';
+import DeleteAccountModal from '../../components/profile/DeleteAccountModal';
+import VoiceFeedbackButton from '../../components/profile/VoiceFeedbackButton';
 import api from '../../lib/api';
 
 const SUPPORT_PHONE = '919311730107';

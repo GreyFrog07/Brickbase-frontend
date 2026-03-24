@@ -23,8 +23,9 @@ import {
   CASE_TYPES,
 } from '../../types/property';
 import { router, useFocusEffect } from 'expo-router';
-import PropertyCard from '../../components/PropertyCard';
-import WhatsAppShareModal from '../../components/WhatsAppShareModal';
+import GridPropertyCard from '../../components/search/GridPropertyCard';
+import CompactPropertyCard from '../../components/search/CompactPropertyCard';
+import WhatsAppShareModal from '../../components/property/WhatsAppShareModal';
 import api from '../../lib/api';
 import {
   getCachedProperties,
@@ -44,6 +45,7 @@ export default function SearchScreen() {
   const [shareProperty, setShareProperty] = useState<Property | null>(null);
   const [showFilters, setShowFilters] = useState(false);
   const [initialLoadDone, setInitialLoadDone] = useState(false);
+  const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
   
   // Filters
   const [searchQuery, setSearchQuery] = useState('');
@@ -376,12 +378,28 @@ export default function SearchScreen() {
           </View>
         )}
 
-        {/* Results Count */}
-        <Text style={styles.resultsCount}>
-          {filteredProperties.length} {filteredProperties.length === 1 ? 'property' : 'properties'} found
-        </Text>
+        {/* Results Count + View Toggle */}
+        <View style={styles.resultsRow}>
+          <Text style={styles.resultsCount}>
+            {filteredProperties.length} {filteredProperties.length === 1 ? 'property' : 'properties'} found
+          </Text>
+          <View style={styles.viewToggle}>
+            <TouchableOpacity
+              style={[styles.toggleBtn, viewMode === 'grid' && styles.toggleBtnActive]}
+              onPress={() => setViewMode('grid')}
+            >
+              <Ionicons name="grid-outline" size={18} color={viewMode === 'grid' ? '#fff' : '#666'} />
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.toggleBtn, viewMode === 'list' && styles.toggleBtnActive]}
+              onPress={() => setViewMode('list')}
+            >
+              <Ionicons name="list-outline" size={18} color={viewMode === 'list' ? '#fff' : '#666'} />
+            </TouchableOpacity>
+          </View>
+        </View>
 
-        {/* Properties List */}
+        {/* Properties */}
         {filteredProperties.length === 0 ? (
           <View style={styles.emptyContainer}>
             <Ionicons name="search-outline" size={64} color="#666" />
@@ -390,10 +408,21 @@ export default function SearchScreen() {
               Try adjusting your filters
             </Text>
           </View>
+        ) : viewMode === 'grid' ? (
+          <View style={styles.gridContainer}>
+            {filteredProperties.map((property) => (
+              <GridPropertyCard
+                key={property.id}
+                property={property}
+                onPress={() => handlePropertyPress(property)}
+                onShare={() => setShareProperty(property)}
+              />
+            ))}
+          </View>
         ) : (
           <View style={styles.listContainer}>
             {filteredProperties.map((property) => (
-              <PropertyCard
+              <CompactPropertyCard
                 key={property.id}
                 property={property}
                 onPress={() => handlePropertyPress(property)}
@@ -535,15 +564,41 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 14,
   },
+  resultsRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+  },
   resultsCount: {
     color: '#999',
     fontSize: 14,
-    padding: 16,
-    paddingBottom: 8,
+  },
+  viewToggle: {
+    flexDirection: 'row',
+    backgroundColor: '#1a1a1a',
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#333',
+    overflow: 'hidden',
+  },
+  toggleBtn: {
+    padding: 7,
+    paddingHorizontal: 10,
+  },
+  toggleBtnActive: {
+    backgroundColor: '#333',
+  },
+  gridContainer: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    paddingHorizontal: 16,
+    gap: 10,
   },
   listContainer: {
     paddingHorizontal: 16,
-    gap: 16,
+    gap: 10,
   },
   emptyContainer: {
     flex: 1,

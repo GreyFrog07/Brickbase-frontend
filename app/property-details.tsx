@@ -17,8 +17,8 @@ import { Ionicons } from '@expo/vector-icons';
 import { Property, FloorEntry, SIZE_UNITS } from '../types/property';
 import * as VideoThumbnails from 'expo-video-thumbnails';
 import api from '../lib/api';
-import WhatsAppShareModal from '../components/WhatsAppShareModal';
-import FullscreenMediaViewer from '../components/FullscreenMediaViewer';
+import WhatsAppShareModal from '../components/property/WhatsAppShareModal';
+import FullscreenMediaViewer from '../components/property/FullscreenMediaViewer';
 
 const { width } = Dimensions.get('window');
 

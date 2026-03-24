@@ -16,7 +16,7 @@ import {
 } from 'expo-audio';
 import * as Haptics from 'expo-haptics';
 import { Ionicons } from '@expo/vector-icons';
-import api from '../lib/api';
+import api from '../../lib/api';
 
 const MIN_DURATION_MS = 1000;
 const MIC_SIZE = 56;

@@ -15,7 +15,7 @@ import {
 } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
 import { Ionicons } from '@expo/vector-icons';
-import { Property } from '../types/property';
+import { Property } from '../../types/property';
 import { File, Paths } from 'expo-file-system/next';
 import * as VideoThumbnails from 'expo-video-thumbnails';
 import * as Sharing from 'expo-sharing';

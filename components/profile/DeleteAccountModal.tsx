@@ -11,8 +11,8 @@ import {
   Keyboard,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { useAuth } from '../contexts/AuthContext';
-import api from '../lib/api';
+import { useAuth } from '../../contexts/AuthContext';
+import api from '../../lib/api';
 
 type Step = 'confirm' | 'otp' | 'deleting';
 

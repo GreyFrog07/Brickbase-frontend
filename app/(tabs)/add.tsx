@@ -24,7 +24,6 @@ import * as DocumentPicker from 'expo-document-picker';
 import * as WebBrowser from 'expo-web-browser';
 import * as Sharing from 'expo-sharing';
 import * as VideoThumbnails from 'expo-video-thumbnails';
-import { Video, ResizeMode, AVPlaybackStatus } from 'expo-av';
 import { useVideoPlayer, VideoView } from 'expo-video';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
@@ -1081,7 +1080,7 @@ export default function AddPropertyScreen() {
         syncPropertyUpdateInBackground(editPropertyId, propertyData);
       } else {
         // OPTIMISTIC: Show success immediately
-        Alert.alert('Success', 'Property added! Syncing...', [
+        Alert.alert('Success', ' Property added! ', [
           { text: 'OK', onPress: async () => {
             await clearFormDraft();
             resetForm();
