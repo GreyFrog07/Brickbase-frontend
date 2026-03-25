@@ -138,7 +138,8 @@ export default function AddPropertyScreen() {
   const [photosWithoutLocation, setPhotosWithoutLocation] = useState<number>(0);
   const [builders, setBuilders] = useState<BuilderInfo[]>([{ name: '', phoneNumber: '', countryCode: '+91' }]);
   const [caseType, setCaseType] = useState<CaseType | ''>('');
-  
+  const [bhk, setBhk] = useState('');
+
   // Floor entries (for Builder Floor and Apartment Society)
   const [floors, setFloors] = useState<FloorEntry[]>([{ tower: '', floorNumber: 0, price: 0, priceUnit: 'cr' }]);
   
@@ -203,9 +204,13 @@ export default function AddPropertyScreen() {
   };
 
   // Check if property type needs multiple floors
-  const needsMultipleFloors = (propertyCategory === 'Residential' && 
+  const needsMultipleFloors = (propertyCategory === 'Residential' &&
     (propertyType === 'Builder Floor' || propertyType === 'Apartment Society')) ||
     (propertyCategory === 'Commercial' && propertyType === 'SCO');
+
+  // Show BHK field for residential: Builder Floor, Villa/House, Apartment Society
+  const showBhkField = propertyCategory === 'Residential' &&
+    (propertyType === 'Builder Floor' || propertyType === 'Villa/House' || propertyType === 'Apartment Society');
 
   // Get available price units based on case type
   const getAvailablePriceUnits = (): { label: string; value: PriceUnit }[] => {
@@ -229,6 +234,7 @@ export default function AddPropertyScreen() {
         coverPhotoIndex,
         builders,
         caseType,
+        bhk,
         floors,
         price,
         priceUnit,
@@ -250,8 +256,8 @@ export default function AddPropertyScreen() {
     } catch (error) {
       console.log('Error saving form draft:', error);
     }
-  }, [propertyCategory, propertyType, photos, videos, coverPhotoIndex, builders, caseType, floors, price, priceUnit, 
-      address, sizes, ageType, propertyAge, possessionMonth, possessionYear, importantFiles, 
+  }, [propertyCategory, propertyType, photos, videos, coverPhotoIndex, builders, caseType, bhk, floors, price, priceUnit,
+      address, sizes, ageType, propertyAge, possessionMonth, possessionYear, importantFiles,
       paymentPlan, additionalNotes, clubProperty, poolProperty, parkProperty, gatedProperty, isEditMode]);
 
   // Load form draft from cache
@@ -267,6 +273,7 @@ export default function AddPropertyScreen() {
         if (draft.coverPhotoIndex !== undefined) setCoverPhotoIndex(draft.coverPhotoIndex);
         if (draft.builders?.length) setBuilders(draft.builders);
         if (draft.caseType) setCaseType(draft.caseType);
+        if (draft.bhk) setBhk(draft.bhk);
         if (draft.floors?.length) setFloors(draft.floors);
         if (draft.price) setPrice(draft.price);
         if (draft.priceUnit) setPriceUnit(draft.priceUnit);
@@ -361,8 +368,9 @@ export default function AddPropertyScreen() {
       setPropertyCategory(property.propertyCategory || '');
       setPropertyType(property.propertyType || '');
       setCaseType(property.case || '');
+      setBhk(property.bhk ? String(property.bhk) : '');
       setAgeType(property.ageType || '');
-      
+
       if (property.floors && property.floors.length > 0) {
         setFloors(property.floors);
       } else if (property.floor) {
@@ -444,6 +452,7 @@ export default function AddPropertyScreen() {
     setPropertyCategory('');
     setPropertyType('');
     setCaseType('');
+    setBhk('');
     setAgeType('');
     setPhotos([]);
     setVideos([]);
@@ -1065,6 +1074,7 @@ export default function AddPropertyScreen() {
         propertyAge: propertyAge ? parseInt(propertyAge) : null,
         ageType: ageType || null,
         case: caseType || null,
+        bhk: bhk ? parseInt(bhk) : null,
         latitude: photoWithLocation?.location?.coords.latitude || null,
         longitude: photoWithLocation?.location?.coords.longitude || null,
       };
@@ -1475,6 +1485,22 @@ export default function AddPropertyScreen() {
                 ))}
               </View>
             </View>
+
+            {/* 5.5 BHK (for residential: Builder Floor, Villa/House, Apartment Society) */}
+            {showBhkField && (
+              <View style={styles.section}>
+                <Text style={styles.label}>BHK</Text>
+                <TextInput
+                  style={styles.input}
+                  placeholder="e.g. 3"
+                  placeholderTextColor="#666"
+                  value={bhk}
+                  onChangeText={(text) => setBhk(text.replace(/[^0-9]/g, ''))}
+                  keyboardType="numeric"
+                  maxLength={2}
+                />
+              </View>
+            )}
 
             {/* 6. Price */}
             {needsMultipleFloors ? (

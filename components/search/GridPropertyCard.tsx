@@ -9,14 +9,15 @@ import {
   Linking,
   Alert,
 } from "react-native";
+import { LinearGradient } from "expo-linear-gradient";
 import { Ionicons } from "@expo/vector-icons";
 import { Property } from "../../types/property";
 
 const SCREEN_WIDTH = Dimensions.get("window").width;
-const GAP = 12;
+const GAP = 10;
 const PADDING = 16;
 const CARD_WIDTH = (SCREEN_WIDTH - PADDING * 2 - GAP) / 2;
-const CARD_HEIGHT = CARD_WIDTH * 1.25;
+const CARD_HEIGHT = CARD_WIDTH * 1.7;
 
 interface Props {
   property: Property;
@@ -54,7 +55,6 @@ export default function GridPropertyCard({
   const handleCall = () => {
     const phone = property.builders?.[0]?.phoneNumber || property.builderPhone;
     if (!phone) return;
-
     const code = property.builders?.[0]?.countryCode || "+91";
     Linking.openURL(`tel:${code}${phone}`).catch(() =>
       Alert.alert("Error", "Cannot open dialer"),
@@ -64,7 +64,6 @@ export default function GridPropertyCard({
   const handleWhatsApp = () => {
     const phone = property.builders?.[0]?.phoneNumber || property.builderPhone;
     if (!phone) return;
-
     const code = property.builders?.[0]?.countryCode || "+91";
     Linking.openURL(
       `whatsapp://send?phone=${code.replace("+", "")}${phone}`,
@@ -74,6 +73,8 @@ export default function GridPropertyCard({
   const image =
     property.propertyPhotos?.[property.coverPhotoIndex ?? 0] ||
     property.propertyPhotos?.[0];
+
+  const hasPhone = !!(property.builders?.[0]?.phoneNumber || property.builderPhone);
 
   return (
     <TouchableOpacity style={styles.card} onPress={onPress} activeOpacity={0.9}>
@@ -85,47 +86,54 @@ export default function GridPropertyCard({
         </View>
       )}
 
-      {/* DARK GRADIENT OVERLAY (FAKE USING VIEW) */}
-      <View style={styles.overlay}>
-        {/* TOP */}
+      {/* Top gradient */}
+      <LinearGradient
+        colors={["rgba(0,0,0,0.45)", "rgba(0,0,0,0)"]}
+        style={styles.topGradient}
+        pointerEvents="box-none"
+      >
         <View style={styles.topRow}>
           <View style={styles.badge}>
             <Text style={styles.badgeText}>
               {property.propertyCategory?.toUpperCase() || "RESIDENTIAL"}
             </Text>
           </View>
-
           {onShare && (
-            <TouchableOpacity onPress={onShare}>
-              <Ionicons name="share-social-outline" size={16} color="#fff" />
+            <TouchableOpacity style={styles.shareIcon} onPress={onShare}>
+              <Ionicons name="share-social" size={16} color="#fff" />
             </TouchableOpacity>
           )}
         </View>
+      </LinearGradient>
 
-        {/* TITLE */}
-        <Text numberOfLines={1} style={styles.title}>
-          {property.propertyType || "Property"}
-        </Text>
-
-        {/* PRICE + ACTIONS */}
-        <View style={styles.bottomRow}>
-          <Text numberOfLines={1} style={styles.price}>
-            {getPrice()}
+      {/* Bottom gradient */}
+      <LinearGradient
+        colors={["rgba(0,0,0,0)", "rgba(0,0,0,0.75)"]}
+        style={styles.bottomGradient}
+        pointerEvents="box-none"
+      >
+        <View style={styles.bottomContent}>
+          <Text numberOfLines={1} style={styles.title}>
+            {property.bhk ? `${property.bhk} BHK ` : ""}{property.propertyType || "Property"}
           </Text>
 
-          {(property.builders?.[0]?.phoneNumber || property.builderPhone) && (
-            <View style={styles.actions}>
-              <TouchableOpacity style={styles.icon} onPress={handleCall}>
-                <Ionicons name="call" size={13} color="#4CAF50" />
-              </TouchableOpacity>
-
-              <TouchableOpacity style={styles.icon} onPress={handleWhatsApp}>
-                <Ionicons name="logo-whatsapp" size={13} color="#25D366" />
-              </TouchableOpacity>
-            </View>
-          )}
+          <View style={styles.priceRow}>
+            <Text style={styles.price}>
+              {getPrice()}
+            </Text>
+            {hasPhone && (
+              <View style={styles.actions}>
+                <TouchableOpacity style={styles.callBtn} onPress={handleCall}>
+                  <Ionicons name="call-outline" size={18} color="#fff" />
+                </TouchableOpacity>
+                <TouchableOpacity style={styles.whatsappBtn} onPress={handleWhatsApp}>
+                  <Ionicons name="chatbubble-ellipses-outline" size={18} color="#fff" />
+                </TouchableOpacity>
+              </View>
+            )}
+          </View>
         </View>
-      </View>
+      </LinearGradient>
     </TouchableOpacity>
   );
 }
@@ -134,7 +142,7 @@ const styles = StyleSheet.create({
   card: {
     width: CARD_WIDTH,
     height: CARD_HEIGHT,
-    borderRadius: 14,
+    borderRadius: 16,
     overflow: "hidden",
     backgroundColor: "#111",
   },
@@ -151,16 +159,13 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
 
-  overlay: {
+  topGradient: {
     position: "absolute",
-    bottom: 0,
+    top: 0,
     left: 0,
     right: 0,
-
-    padding: 10,
-    paddingTop: 18,
-
-    backgroundColor: "rgba(0,0,0,0.65)",
+    height: "40%",
+    padding: 12,
   },
 
   topRow: {
@@ -170,49 +175,81 @@ const styles = StyleSheet.create({
   },
 
   badge: {
-    backgroundColor: "rgba(255,255,255,0.18)",
-    paddingHorizontal: 6,
-    paddingVertical: 2,
+    backgroundColor: "rgba(255,255,255,0.2)",
+    paddingHorizontal: 10,
+    paddingVertical: 4,
     borderRadius: 4,
   },
 
   badgeText: {
     color: "#fff",
-    fontSize: 8,
+    fontSize: 12,
     fontWeight: "600",
-    letterSpacing: 0.4,
+    letterSpacing: 0.5,
+    fontFamily: 'sans-serif'
   },
+
+  shareIcon: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: "rgba(150,150,150,0.5)",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+
+  bottomGradient: {
+    position: "absolute",
+    bottom: 0,
+    left: 0,
+    right: 0,
+    height: "50%",
+    justifyContent: "flex-end",
+    padding: 12,
+  },
+
+  bottomContent: {},
 
   title: {
     color: "#fff",
-    fontSize: 13,
-    fontWeight: "600",
-    marginTop: 4,
+    fontSize: 16,
+    fontWeight: "700",
   },
 
-  bottomRow: {
+  priceRow: {
     flexDirection: "row",
     alignItems: "center",
+    justifyContent: "space-between",
     marginTop: 4,
   },
 
   price: {
-    flex: 1,
     color: "#fff",
-    fontSize: 13,
-    fontWeight: "700",
+    fontSize: 16,
+    fontWeight: "800",
+    flexShrink: 1,
   },
 
   actions: {
     flexDirection: "row",
-    gap: 6,
+    gap: 8,
+    marginLeft: 6,
   },
 
-  icon: {
-    width: 24,
-    height: 24,
-    borderRadius: 12,
-    backgroundColor: "rgba(255,255,255,0.12)",
+  callBtn: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: "rgba(255,255,255,0.15)",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+
+  whatsappBtn: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: "rgba(255,255,255,0.15)",
     justifyContent: "center",
     alignItems: "center",
   },

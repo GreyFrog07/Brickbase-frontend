@@ -11,7 +11,7 @@ interface CompactPropertyCardProps {
 
 export default function CompactPropertyCard({ property, onPress, onShare }: CompactPropertyCardProps) {
   const formatPrice = (price?: number, unit?: string) => {
-    if (!price) return 'Price N/A';
+    if (!price) return null;
     if (unit === 'cr') return `₹${price.toFixed(2)} Cr`;
     if (unit === 'lakh_per_month') return `₹${price.toFixed(1)} L/mo`;
     return `₹${price.toFixed(2)} L`;
@@ -39,28 +39,43 @@ export default function CompactPropertyCard({ property, onPress, onShare }: Comp
 
   const getLocationInfo = () => {
     if (!property.address) return null;
-    const parts = [property.address.sector, property.address.city].filter(Boolean);
+    const parts = [property.address.city, property.address.sector].filter(Boolean);
     return parts.length > 0 ? parts.join(', ') : null;
   };
 
   const handleCall = () => {
     const phoneNumber = property.builders?.[0]?.phoneNumber || property.builderPhone;
-    if (phoneNumber) {
-      const countryCode = property.builders?.[0]?.countryCode || '+91';
-      Linking.openURL(`tel:${countryCode}${phoneNumber}`).catch(() => {
-        Alert.alert('Error', 'Could not open phone app');
-      });
-    }
+    if (!phoneNumber) return;
+    const countryCode = property.builders?.[0]?.countryCode || '+91';
+    Linking.openURL(`tel:${countryCode}${phoneNumber}`).catch(() => {
+      Alert.alert('Error', 'Could not open phone app');
+    });
+  };
+
+  const handleWhatsApp = () => {
+    const phoneNumber = property.builders?.[0]?.phoneNumber || property.builderPhone;
+    if (!phoneNumber) return;
+    const countryCode = property.builders?.[0]?.countryCode || '+91';
+    Linking.openURL(
+      `whatsapp://send?phone=${countryCode.replace('+', '')}${phoneNumber}`,
+    ).catch(() => Alert.alert('Error', 'WhatsApp not installed'));
   };
 
   const coverIndex = property.coverPhotoIndex ?? 0;
   const coverPhoto = property.propertyPhotos?.[coverIndex] || property.propertyPhotos?.[0];
+  const bhkInfo = property.bhk ? `${property.bhk} BHK` : null;
   const sizeInfo = getSizeInfo();
   const locationInfo = getLocationInfo();
   const hasPhone = !!(property.builders?.[0]?.phoneNumber || property.builderPhone);
+  const displayPrice = getDisplayPrice();
 
-  const detailParts = [sizeInfo, locationInfo].filter(Boolean);
-  const detailLine = detailParts.join('  |  ');
+  // "x BHK | 3500 sq ft"
+  const detailParts = [bhkInfo, sizeInfo].filter(Boolean);
+  const detailLine = detailParts.length > 0 ? detailParts.join('  |  ') : null;
+
+  // "Property Type | ₹Price"
+  const propertyName = property.propertyType || 'Property';
+  const titleLine = displayPrice ? `${propertyName}  |  ${displayPrice}` : propertyName;
 
   return (
     <TouchableOpacity style={styles.card} onPress={onPress} activeOpacity={0.9}>
@@ -69,35 +84,50 @@ export default function CompactPropertyCard({ property, onPress, onShare }: Comp
         <Image source={{ uri: coverPhoto }} style={styles.thumbnail} />
       ) : (
         <View style={[styles.thumbnail, styles.placeholderThumb]}>
-          <Ionicons name="image-outline" size={24} color="#555" />
+          <Ionicons name="image-outline" size={28} color="#555" />
         </View>
       )}
 
-      {/* Details */}
-      <View style={styles.details}>
-        {property.propertyCategory && (
-          <Text style={styles.category}>{property.propertyCategory}</Text>
-        )}
-        <Text style={styles.propertyType} numberOfLines={1}>
-          {property.propertyType || 'Property'}
-        </Text>
-        <Text style={styles.price}>{getDisplayPrice()}</Text>
-        {detailLine ? (
-          <Text style={styles.detailLine} numberOfLines={1}>{detailLine}</Text>
-        ) : null}
-      </View>
+      {/* Right content area */}
+      <View style={styles.content}>
+        {/* Top section: info */}
+        <View style={styles.infoSection}>
+          {/* Category + share row */}
+          <View style={styles.topRow}>
+            {property.propertyCategory ? (
+              <Text style={styles.category}>{property.propertyCategory.toUpperCase()}</Text>
+            ) : <View />}
+            {onShare && (
+              <TouchableOpacity style={styles.shareBtn} onPress={onShare}>
+                <Ionicons name="share-social-outline" size={16} color="#999" />
+              </TouchableOpacity>
+            )}
+          </View>
 
-      {/* Action buttons */}
-      <View style={styles.actions}>
+          {/* Property type | Price */}
+          <Text style={styles.titleLine} numberOfLines={1}>{titleLine}</Text>
+
+          {/* BHK | size */}
+          {detailLine && (
+            <Text style={styles.detailLine} numberOfLines={1}>{detailLine}</Text>
+          )}
+
+          {/* Location */}
+          {locationInfo && (
+            <Text style={styles.detailLine} numberOfLines={1}>{locationInfo}</Text>
+          )}
+        </View>
+
+        {/* Bottom row: buttons pinned bottom-right */}
         {hasPhone && (
-          <TouchableOpacity style={styles.callBtn} onPress={handleCall}>
-            <Ionicons name="call" size={18} color="#fff" />
-          </TouchableOpacity>
-        )}
-        {onShare && (
-          <TouchableOpacity style={styles.shareBtn} onPress={onShare}>
-            <Ionicons name="share-social-outline" size={18} color="#999" />
-          </TouchableOpacity>
+          <View style={styles.bottomActions}>
+            <TouchableOpacity style={styles.callBtn} onPress={handleCall}>
+              <Ionicons name="call-outline" size={16} color="#fff" />
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.whatsappBtn} onPress={handleWhatsApp}>
+              <Ionicons name="chatbubble-ellipses-outline" size={16} color="#fff" />
+            </TouchableOpacity>
+          </View>
         )}
       </View>
     </TouchableOpacity>
@@ -107,16 +137,15 @@ export default function CompactPropertyCard({ property, onPress, onShare }: Comp
 const styles = StyleSheet.create({
   card: {
     flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#1a1a1a',
+    backgroundColor: 'rgba(255,255,255,0.05)',
     borderRadius: 14,
     overflow: 'hidden',
-    borderWidth: 1,
-    borderColor: '#2a2a2a',
-    height: 100,
+    borderWidth: 0.5,
+    borderColor: 'rgba(255,255,255,0.18)',
+    height: 150,
   },
   thumbnail: {
-    width: 100,
+    width: 140,
     height: '100%',
     backgroundColor: '#333',
     resizeMode: 'cover',
@@ -125,48 +154,54 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
-  details: {
+  content: {
     flex: 1,
     paddingHorizontal: 12,
     paddingVertical: 10,
-    justifyContent: 'center',
-    gap: 1,
+    justifyContent: 'space-between',
+  },
+  infoSection: {
+    flex: 1,
+  },
+  topRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
   },
   category: {
     color: '#999',
-    fontSize: 10,
+    fontSize: 11,
     fontWeight: '600',
-    textTransform: 'uppercase',
     letterSpacing: 0.5,
   },
-  propertyType: {
-    color: '#fff',
-    fontSize: 15,
-    fontWeight: '700',
-    marginTop: 1,
+  shareBtn: {
+    padding: 2,
   },
-  price: {
+  titleLine: {
     color: '#fff',
-    fontSize: 15,
-    fontWeight: '600',
-    marginTop: 1,
+    fontSize: 16,
+    fontWeight: '700',
+    marginTop: 3,
   },
   detailLine: {
-    color: '#777',
-    fontSize: 11,
+    color: '#888',
+    fontSize: 12,
     marginTop: 2,
   },
-  actions: {
-    paddingRight: 12,
-    alignItems: 'center',
+  bottomActions: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
     gap: 8,
+    marginTop: 4,
   },
   callBtn: {
-    backgroundColor: '#4CAF50',
+    backgroundColor: 'rgba(255,255,255,0.1)',
     borderRadius: 18,
-    padding: 9,
+    padding: 8,
   },
-  shareBtn: {
-    padding: 4,
+  whatsappBtn: {
+    backgroundColor: 'rgba(255,255,255,0.1)',
+    borderRadius: 18,
+    padding: 8,
   },
 });

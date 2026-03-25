@@ -1,5 +1,5 @@
-import React, { forwardRef, useImperativeHandle, useRef } from 'react';
-import { View, Text, StyleSheet, Image, Platform } from 'react-native';
+import React, { forwardRef, useImperativeHandle, useRef, useState } from 'react';
+import { View, Text, StyleSheet, Image } from 'react-native';
 import MapView, { Marker, PROVIDER_GOOGLE, Region } from 'react-native-maps';
 import { Ionicons } from '@expo/vector-icons';
 import { Property } from '../../types/property';
@@ -17,6 +17,52 @@ export interface MapViewComponentProps {
 
 export interface MapViewHandle {
   animateToRegion: (region: Region, duration?: number) => void;
+}
+
+function PropertyMarker({
+  property,
+  coverPhoto,
+  formatPrice,
+  onPress,
+}: {
+  property: Property;
+  coverPhoto: string | null;
+  formatPrice: (p: Property) => string;
+  onPress: () => void;
+}) {
+  const [imageLoaded, setImageLoaded] = useState(false);
+
+  return (
+    <Marker
+      coordinate={{
+        latitude: property.latitude!,
+        longitude: property.longitude!,
+      }}
+      onPress={onPress}
+      tracksViewChanges={coverPhoto ? !imageLoaded : false}
+    >
+      <View style={styles.markerWrapper}>
+        <View style={styles.markerCard}>
+          {coverPhoto ? (
+            <Image
+              source={{ uri: coverPhoto }}
+              style={styles.markerImage}
+              onLoad={() => setImageLoaded(true)}
+            />
+          ) : (
+            <View style={styles.markerPlaceholder}>
+              <Ionicons name="home" size={22} color="#666" />
+            </View>
+          )}
+          <View style={styles.markerPriceBar}>
+            <Text style={styles.markerPriceText} numberOfLines={1}>
+              {formatPrice(property)}
+            </Text>
+          </View>
+        </View>
+      </View>
+    </Marker>
+  );
 }
 
 export default forwardRef<MapViewHandle, MapViewComponentProps>(function MapViewComponent(
@@ -52,40 +98,15 @@ export default forwardRef<MapViewHandle, MapViewComponentProps>(function MapView
       mapType={mapType}
       customMapStyle={isDarkMode ? darkMapStyle : undefined}
     >
-      {filteredProperties.map((property) => {
-        const coverPhoto = getCoverPhoto(property);
-        return (
-          <Marker
-            key={property.id}
-            coordinate={{
-              latitude: property.latitude!,
-              longitude: property.longitude!,
-            }}
-            onPress={() => setSelectedProperty(property)}
-            tracksViewChanges={Platform.OS === 'ios'}
-          >
-            <View style={styles.markerWrapper}>
-              <View style={styles.markerCard}>
-                {coverPhoto ? (
-                  <Image
-                    source={{ uri: coverPhoto }}
-                    style={styles.markerImage}
-                  />
-                ) : (
-                  <View style={styles.markerPlaceholder}>
-                    <Ionicons name="home" size={22} color="#666" />
-                  </View>
-                )}
-                <View style={styles.markerPriceBar}>
-                  <Text style={styles.markerPriceText} numberOfLines={1}>
-                    {formatPrice(property)}
-                  </Text>
-                </View>
-              </View>
-            </View>
-          </Marker>
-        );
-      })}
+      {filteredProperties.map((property) => (
+        <PropertyMarker
+          key={property.id}
+          property={property}
+          coverPhoto={getCoverPhoto(property)}
+          formatPrice={formatPrice}
+          onPress={() => setSelectedProperty(property)}
+        />
+      ))}
     </MapView>
   );
 });

@@ -94,6 +94,7 @@ export interface Property {
   sizes?: SizeEntry[];
   address?: AddressInfo;
   importantFiles?: ImportantFile[];
+  bhk?: number;
   isSold?: boolean;
   createdAt?: string;
   updatedAt?: string;

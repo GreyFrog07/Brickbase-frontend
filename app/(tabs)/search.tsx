@@ -46,7 +46,7 @@ export default function SearchScreen() {
   const [showFilters, setShowFilters] = useState(false);
   const [initialLoadDone, setInitialLoadDone] = useState(false);
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
-  
+
   // Filters
   const [searchQuery, setSearchQuery] = useState('');
   const [propertyCategory, setPropertyCategory] = useState<PropertyCategory | ''>('');
@@ -399,7 +399,7 @@ export default function SearchScreen() {
           </View>
         </View>
 
-        {/* Properties */}
+        {/* Properties (swipe left/right to toggle view) */}
         {filteredProperties.length === 0 ? (
           <View style={styles.emptyContainer}>
             <Ionicons name="search-outline" size={64} color="#666" />
