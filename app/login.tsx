@@ -32,8 +32,9 @@ export default function LoginScreen() {
   // Phone step
   const [phone, setPhone] = useState('');
   const [countryCode, setCountryCode] = useState('+91');
-  // Temp token for new user signup flow
+  // Temp tokens for new user signup flow
   const [tempToken, setTempToken] = useState<string | null>(null);
+  const [tempRefreshToken, setTempRefreshToken] = useState<string | null>(null);
   
   // OTP step - single string for autofill support
   const [otpValue, setOtpValue] = useState('');
@@ -146,11 +147,12 @@ export default function LoginScreen() {
       if (response.data.userExists) {
         // Existing user - log them in
         const { token } = response.data;
-        await signIn(token.access_token, token.user);
+        await signIn(token.access_token, token.refresh_token, token.user);
       } else {
-        // New user - save temp token for complete-signup, go to signup form
+        // New user - save temp tokens for complete-signup, go to signup form
         if (response.data.accessToken) {
           setTempToken(response.data.accessToken);
+          setTempRefreshToken(response.data.refreshToken);
           await AsyncStorage.setItem('access_token', response.data.accessToken);
         }
         setStep('signup');
@@ -218,9 +220,10 @@ export default function LoginScreen() {
         firmName: firmName.trim() || null,
         city: city.trim(),
         email: email.trim() || null,
+        refreshToken: tempRefreshToken,
       });
-      
-      await signIn(response.data.access_token, response.data.user);
+
+      await signIn(response.data.access_token, response.data.refresh_token, response.data.user);
       
     } catch (error: any) {
       console.error('Signup error:', error);

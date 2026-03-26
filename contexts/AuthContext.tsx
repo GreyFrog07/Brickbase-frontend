@@ -3,6 +3,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { router } from 'expo-router';
 import api from '../lib/api';
 import { clearAllCache } from '../lib/cache';
+import { authEvents } from '../lib/authEvents';
 
 interface User {
   id: string;
@@ -19,7 +20,7 @@ interface User {
 interface AuthContextType {
   user: User | null;
   loading: boolean;
-  signIn: (token: string, userData: User) => Promise<void>;
+  signIn: (token: string, refreshToken: string, userData: User) => Promise<void>;
   signOut: () => Promise<void>;
   updateUser: (updates: Partial<User>) => Promise<void>;
 }
@@ -42,24 +43,35 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     checkAuth();
   }, []);
 
+  // Listen for session-expired events from the API interceptor
+  useEffect(() => {
+    const unsubscribe = authEvents.onSessionExpired(() => {
+      setUser(null);
+      clearAllCache();
+      router.replace('/login');
+    });
+    return unsubscribe;
+  }, []);
+
   const checkAuth = async () => {
     try {
       const token = await AsyncStorage.getItem('access_token');
       const userStr = await AsyncStorage.getItem('user');
-      
+
       if (token && userStr) {
         const userData = JSON.parse(userStr);
         setUser(userData);
-        
-        // Verify token is still valid
+
+        // Verify token is still valid (api interceptor will auto-refresh if needed)
         try {
           const response = await api.get('/auth/me');
           setUser(response.data);
           await AsyncStorage.setItem('user', JSON.stringify(response.data));
         } catch (error) {
-          // Token invalid, clear
+          // Token invalid and refresh also failed — interceptor already emitted session-expired
           await clearAllCache();
           await AsyncStorage.removeItem('access_token');
+          await AsyncStorage.removeItem('refresh_token');
           await AsyncStorage.removeItem('user');
           setUser(null);
         }
@@ -71,12 +83,12 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     }
   };
 
-  // New signIn that accepts token and user directly (for OTP flow)
-  const signIn = async (token: string, userData: User) => {
+  const signIn = async (token: string, refreshToken: string, userData: User) => {
     try {
       await AsyncStorage.setItem('access_token', token);
+      await AsyncStorage.setItem('refresh_token', refreshToken);
       await AsyncStorage.setItem('user', JSON.stringify(userData));
-      
+
       setUser(userData);
       router.replace('/(tabs)/add');
     } catch (error: any) {
@@ -92,9 +104,9 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
   };
 
   const signOut = async () => {
-    // Clear all cached data when user logs out
     await clearAllCache();
     await AsyncStorage.removeItem('access_token');
+    await AsyncStorage.removeItem('refresh_token');
     await AsyncStorage.removeItem('user');
     setUser(null);
     router.replace('/login');
