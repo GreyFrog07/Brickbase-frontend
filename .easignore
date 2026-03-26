@@ -5,6 +5,9 @@ node_modules/
 android/
 ios/
 
+# Android backup (native build copy, not needed for EAS)
+_android_backup/
+
 # Expo cache
 .expo/
 
@@ -38,3 +41,6 @@ yarn-error.*
 
 # Environment (should use EAS environment variables)
 .env*.local
+
+# Duplicate lockfile (keep only package-lock.json)
+yarn.lock
