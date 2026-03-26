@@ -56,7 +56,7 @@ export default function TabLayout() {
         name="add"
         options={{
           title: 'Add Property',
-          tabBarIcon: ({ color, size }) => (
+          tabBarIcon: ({ color, size }: { color: string; size: number }) => (
             <Ionicons name="add-circle" size={size} color={color} />
           ),
         }}
@@ -65,7 +65,7 @@ export default function TabLayout() {
         name="search"
         options={{
           title: 'Search',
-          tabBarIcon: ({ color, size }) => (
+          tabBarIcon: ({ color, size }: { color: string; size: number }) => (
             <Ionicons name="search" size={size} color={color} />
           ),
         }}
@@ -75,7 +75,7 @@ export default function TabLayout() {
         options={{
           title: 'Map',
           headerShown: false,
-          tabBarIcon: ({ color, size }) => (
+          tabBarIcon: ({ color, size }: { color: string; size: number }) => (
             <Ionicons name="map" size={size} color={color} />
           ),
         }}
@@ -84,7 +84,7 @@ export default function TabLayout() {
         name="profile"
         options={{
           title: 'Profile',
-          tabBarIcon: ({ color, size }) => (
+          tabBarIcon: ({ color, size }: { color: string; size: number }) => (
             <Ionicons name="person" size={size} color={color} />
           ),
         }}
