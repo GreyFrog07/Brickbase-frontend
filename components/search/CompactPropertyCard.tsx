@@ -1,7 +1,8 @@
 import React from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, Image, Linking, Alert } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, Linking, Alert } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { Property } from '../../types/property';
+import CachedImage from '../CachedImage';
 
 interface CompactPropertyCardProps {
   property: Property;
@@ -39,7 +40,11 @@ export default function CompactPropertyCard({ property, onPress, onShare }: Comp
 
   const getLocationInfo = () => {
     if (!property.address) return null;
-    const parts = [property.address.city, property.address.sector].filter(Boolean);
+    const parts: string[] = [];
+    if (property.address.block) parts.push(`Block ${property.address.block}`);
+    if (property.address.sector) parts.push(`Sector ${property.address.sector}`);
+    if (property.address.area) parts.push(property.address.area);
+    if (property.address.city) parts.push(property.address.city);
     return parts.length > 0 ? parts.join(', ') : null;
   };
 
@@ -61,6 +66,7 @@ export default function CompactPropertyCard({ property, onPress, onShare }: Comp
     ).catch(() => Alert.alert('Error', 'WhatsApp not installed'));
   };
 
+  const isCorner = (property as any).cornerProperty;
   const coverIndex = property.coverPhotoIndex ?? 0;
   const coverPhoto = property.propertyPhotos?.[coverIndex] || property.propertyPhotos?.[0];
   const bhkInfo = property.bhk ? `${property.bhk} BHK` : null;
@@ -81,7 +87,7 @@ export default function CompactPropertyCard({ property, onPress, onShare }: Comp
     <TouchableOpacity style={styles.card} onPress={onPress} activeOpacity={0.9}>
       {/* Thumbnail */}
       {coverPhoto ? (
-        <Image source={{ uri: coverPhoto }} style={styles.thumbnail} />
+        <CachedImage uri={coverPhoto} style={styles.thumbnail} />
       ) : (
         <View style={[styles.thumbnail, styles.placeholderThumb]}>
           <Ionicons name="image-outline" size={28} color="#555" />
@@ -92,11 +98,18 @@ export default function CompactPropertyCard({ property, onPress, onShare }: Comp
       <View style={styles.content}>
         {/* Top section: info */}
         <View style={styles.infoSection}>
-          {/* Category + share row */}
+          {/* Category + corner + share row */}
           <View style={styles.topRow}>
-            {property.propertyCategory ? (
-              <Text style={styles.category}>{property.propertyCategory.toUpperCase()}</Text>
-            ) : <View />}
+            <View style={styles.badgeRow}>
+              {property.propertyCategory ? (
+                <Text style={styles.category}>{property.propertyCategory.toUpperCase()}</Text>
+              ) : null}
+              {isCorner && (
+                <View style={styles.cornerBadge}>
+                  <Text style={styles.cornerBadgeText}>CORNER</Text>
+                </View>
+              )}
+            </View>
             {onShare && (
               <TouchableOpacity style={styles.shareBtn} onPress={onShare}>
                 <Ionicons name="share-social-outline" size={16} color="#999" />
@@ -168,10 +181,27 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'center',
   },
+  badgeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
   category: {
     color: '#999',
     fontSize: 11,
     fontWeight: '600',
+    letterSpacing: 0.5,
+  },
+  cornerBadge: {
+    backgroundColor: 'rgba(255,180,0,0.2)',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+  },
+  cornerBadgeText: {
+    color: '#ffb400',
+    fontSize: 9,
+    fontWeight: '700',
     letterSpacing: 0.5,
   },
   shareBtn: {

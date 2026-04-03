@@ -42,6 +42,7 @@ export interface AddressInfo {
   unitNo?: string;
   block?: string;
   sector?: string;
+  area?: string;
   city?: string;
 }
 
@@ -85,6 +86,7 @@ export interface Property {
   poolProperty: boolean;
   parkProperty: boolean;
   gatedProperty: boolean;
+  cornerProperty: boolean;
   propertyAge?: number;
   ageType?: AgeType;
   handoverDate?: string; // Legacy - will be removed

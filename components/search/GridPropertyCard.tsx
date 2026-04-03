@@ -4,7 +4,6 @@ import {
   Text,
   TouchableOpacity,
   StyleSheet,
-  Image,
   Dimensions,
   Linking,
   Alert,
@@ -12,6 +11,7 @@ import {
 import { LinearGradient } from "expo-linear-gradient";
 import { Ionicons } from "@expo/vector-icons";
 import { Property } from "../../types/property";
+import CachedImage from "../CachedImage";
 
 const SCREEN_WIDTH = Dimensions.get("window").width;
 const GAP = 10;
@@ -75,11 +75,22 @@ export default function GridPropertyCard({
     property.propertyPhotos?.[0];
 
   const hasPhone = !!(property.builders?.[0]?.phoneNumber || property.builderPhone);
+  const isCorner = (property as any).cornerProperty;
+
+  const getLocationInfo = () => {
+    if (!property.address) return null;
+    const parts: string[] = [];
+    if (property.address.sector) parts.push(`Sec ${property.address.sector}`);
+    if (property.address.city) parts.push(property.address.city);
+    return parts.length > 0 ? parts.join(', ') : null;
+  };
+
+  const locationInfo = getLocationInfo();
 
   return (
     <TouchableOpacity style={styles.card} onPress={onPress} activeOpacity={0.9}>
       {image ? (
-        <Image source={{ uri: image }} style={styles.image} />
+        <CachedImage uri={image} style={styles.image} />
       ) : (
         <View style={styles.placeholder}>
           <Ionicons name="image-outline" size={28} color="#666" />
@@ -93,10 +104,17 @@ export default function GridPropertyCard({
         pointerEvents="box-none"
       >
         <View style={styles.topRow}>
-          <View style={styles.badge}>
-            <Text style={styles.badgeText}>
-              {property.propertyCategory?.toUpperCase() || "RESIDENTIAL"}
-            </Text>
+          <View style={styles.badgeRow}>
+            <View style={styles.badge}>
+              <Text style={styles.badgeText}>
+                {property.propertyCategory?.toUpperCase() || "RESIDENTIAL"}
+              </Text>
+            </View>
+            {isCorner && (
+              <View style={styles.cornerBadge}>
+                <Text style={styles.cornerBadgeText}>CORNER</Text>
+              </View>
+            )}
           </View>
           {onShare && (
             <TouchableOpacity style={styles.shareIcon} onPress={onShare}>
@@ -116,6 +134,9 @@ export default function GridPropertyCard({
           <Text numberOfLines={1} style={styles.title}>
             {property.bhk ? `${property.bhk} BHK ` : ""}{property.propertyType || "Property"}
           </Text>
+          {locationInfo && (
+            <Text numberOfLines={1} style={styles.locationLine}>{locationInfo}</Text>
+          )}
 
           <View style={styles.priceRow}>
             <Text style={styles.price}>
@@ -174,11 +195,31 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
 
+  badgeRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+  },
+
   badge: {
     backgroundColor: "rgba(255,255,255,0.2)",
     paddingHorizontal: 10,
     paddingVertical: 4,
     borderRadius: 4,
+  },
+
+  cornerBadge: {
+    backgroundColor: "rgba(255,180,0,0.3)",
+    paddingHorizontal: 6,
+    paddingVertical: 3,
+    borderRadius: 4,
+  },
+
+  cornerBadgeText: {
+    color: "#ffb400",
+    fontSize: 9,
+    fontWeight: "700",
+    letterSpacing: 0.5,
   },
 
   badgeText: {
@@ -214,6 +255,12 @@ const styles = StyleSheet.create({
     color: "#fff",
     fontSize: 16,
     fontWeight: "700",
+  },
+
+  locationLine: {
+    color: "rgba(255,255,255,0.6)",
+    fontSize: 11,
+    marginTop: 1,
   },
 
   priceRow: {

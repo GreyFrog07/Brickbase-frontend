@@ -16,6 +16,7 @@ import {
   FlatList,
   PanResponder,
   Animated,
+  AppState,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as ImagePicker from 'expo-image-picker';
@@ -51,11 +52,13 @@ import {
 import { useLocalSearchParams, router, useFocusEffect } from 'expo-router';
 import api from '../../lib/api';
 import { setNewPropertyAdded } from '../../lib/cache';
+import { cacheLocalImage } from '../../lib/imageCache';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 const MAX_CONTENT_WIDTH = 500;
 
-const COUNTRY_CODES = ['+91', '+1', '+44', '+971'];
+// India only - fixed country code
+const COUNTRY_CODE = '+91';
 
 // Generate years from current year to 2075
 const generateYears = () => {
@@ -120,7 +123,21 @@ export default function AddPropertyScreen() {
   const editPropertyId = params.editPropertyId as string | undefined;
   const insets = useSafeAreaInsets();
   const scrollViewRef = useRef<ScrollView>(null);
-  
+  const scrollPositionRef = useRef(0);
+
+  // Preserve scroll position when app goes to background and comes back
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', (nextAppState) => {
+      if (nextAppState === 'active') {
+        // Restore scroll position when app comes back
+        setTimeout(() => {
+          scrollViewRef.current?.scrollTo({ y: scrollPositionRef.current, animated: false });
+        }, 100);
+      }
+    });
+    return () => subscription.remove();
+  }, []);
+
   const [loading, setLoading] = useState(false);
   const [isEditMode, setIsEditMode] = useState(false);
   
@@ -155,6 +172,7 @@ export default function AddPropertyScreen() {
     unitNo: '',
     block: '',
     sector: '',
+    area: '',
     city: '',
   });
   
@@ -181,7 +199,8 @@ export default function AddPropertyScreen() {
   const [poolProperty, setPoolProperty] = useState(false);
   const [parkProperty, setParkProperty] = useState(false);
   const [gatedProperty, setGatedProperty] = useState(false);
-  
+  const [cornerProperty, setCornerProperty] = useState(false);
+
   // Dropdowns
   const [showPriceDropdown, setShowPriceDropdown] = useState(false);
   const [activeFloorDropdown, setActiveFloorDropdown] = useState<number | null>(null);
@@ -251,6 +270,7 @@ export default function AddPropertyScreen() {
         poolProperty,
         parkProperty,
         gatedProperty,
+        cornerProperty,
       };
       await AsyncStorage.setItem(FORM_DRAFT_KEY, JSON.stringify(draft));
     } catch (error) {
@@ -258,7 +278,7 @@ export default function AddPropertyScreen() {
     }
   }, [propertyCategory, propertyType, photos, videos, coverPhotoIndex, builders, caseType, bhk, floors, price, priceUnit,
       address, sizes, ageType, propertyAge, possessionMonth, possessionYear, importantFiles,
-      paymentPlan, additionalNotes, clubProperty, poolProperty, parkProperty, gatedProperty, isEditMode]);
+      paymentPlan, additionalNotes, clubProperty, poolProperty, parkProperty, gatedProperty, cornerProperty, isEditMode]);
 
   // Load form draft from cache
   const loadFormDraft = useCallback(async () => {
@@ -290,6 +310,7 @@ export default function AddPropertyScreen() {
         setPoolProperty(draft.poolProperty || false);
         setParkProperty(draft.parkProperty || false);
         setGatedProperty(draft.gatedProperty || false);
+        setCornerProperty(draft.cornerProperty || false);
       }
     } catch (error) {
       console.log('Error loading form draft:', error);
@@ -405,6 +426,7 @@ export default function AddPropertyScreen() {
       setPoolProperty(property.poolProperty);
       setParkProperty(property.parkProperty);
       setGatedProperty(property.gatedProperty);
+      setCornerProperty(property.cornerProperty);
       setPropertyAge(property.propertyAge?.toString() || '');
       
       // Load cover photo index
@@ -473,6 +495,7 @@ export default function AddPropertyScreen() {
     setPoolProperty(false);
     setParkProperty(false);
     setGatedProperty(false);
+    setCornerProperty(false);
     setPropertyAge('');
     setIsEditMode(false);
     setErrors({});
@@ -493,10 +516,10 @@ export default function AddPropertyScreen() {
       newErrors.photos = 'At least one property photo is required';
     }
 
-    // Validate builder phone numbers
+    // Validate builder phone numbers - must be exactly 10 digits
     builders.forEach((builder, index) => {
-      if (builder.phoneNumber && builder.phoneNumber.length > 0 && builder.phoneNumber.length < 10) {
-        newErrors[`builderPhone_${index}`] = 'Phone number should be at least 10 digits';
+      if (builder.phoneNumber && builder.phoneNumber.length > 0 && builder.phoneNumber.length !== 10) {
+        newErrors[`builderPhone_${index}`] = 'Phone number must be exactly 10 digits';
       }
     });
 
@@ -510,6 +533,27 @@ export default function AddPropertyScreen() {
     const { status: locationStatus } = await Location.requestForegroundPermissionsAsync();
     
     return { cameraStatus, mediaStatus, locationStatus };
+  };
+
+  // Auto-fill address from photo GPS data via reverse geocoding
+  const autoFillAddressFromLocation = async (location: Location.LocationObject) => {
+    try {
+      const [result] = await Location.reverseGeocodeAsync({
+        latitude: location.coords.latitude,
+        longitude: location.coords.longitude,
+      });
+      if (result) {
+        const sectorNum = (result.district || '').replace(/[^0-9]/g, '');
+        setAddress(prev => ({
+          ...prev,
+          sector: prev.sector || sectorNum,
+          area: prev.area || result.subregion || result.street || '',
+          city: prev.city || result.city || '',
+        }));
+      }
+    } catch (error) {
+      console.log('Reverse geocode failed:', error);
+    }
   };
 
   const takePicture = async () => {
@@ -547,12 +591,17 @@ export default function AddPropertyScreen() {
       };
 
       setPhotos(prev => [...prev, newPhoto]);
-      
+
       // Clear validation error when photo is added
       if (errors.photos) {
         setErrors(prev => ({ ...prev, photos: '' }));
       }
-      
+
+      // Auto-fill address from location if available
+      if (location && (!address.sector || !address.city)) {
+        autoFillAddressFromLocation(location);
+      }
+
       if (!location) {
         setPhotosWithoutLocation(prev => prev + 1);
       }
@@ -642,12 +691,18 @@ export default function AddPropertyScreen() {
       });
 
       setPhotos(prev => [...prev, ...newPhotos]);
-      
+
       // Clear validation error when photos are added
       if (errors.photos) {
         setErrors(prev => ({ ...prev, photos: '' }));
       }
-      
+
+      // Auto-fill address from first photo with location
+      const photoWithLoc = newPhotos.find(p => p.location);
+      if (photoWithLoc?.location && (!address.sector || !address.city)) {
+        autoFillAddressFromLocation(photoWithLoc.location);
+      }
+
       if (withoutLocationCount > 0) {
         setPhotosWithoutLocation(prev => prev + withoutLocationCount);
         
@@ -953,9 +1008,16 @@ export default function AddPropertyScreen() {
   };
 
   // Size management
+  const getDefaultSizeUnit = (): SizeUnit => {
+    if (propertyCategory === 'Residential' && (propertyType === 'Builder Floor' || propertyType === 'Plot')) {
+      return 'sq_yards';
+    }
+    return 'sq_ft';
+  };
+
   const addSize = (type: 'carpet' | 'builtup' | 'superbuiltup') => {
     if (!sizes.find(s => s.type === type)) {
-      setSizes([...sizes, { type, value: 0, unit: 'sq_ft' }]);
+      setSizes([...sizes, { type, value: 0, unit: getDefaultSizeUnit() }]);
     }
   };
 
@@ -1030,8 +1092,15 @@ export default function AddPropertyScreen() {
         uploadFilesToStorage(),
       ]);
       
+      // Pre-cache uploaded photos locally so they never need to be re-downloaded
+      photoUrls.forEach((storagePath, i) => {
+        if (storagePath && photos[i] && !photos[i].uri.startsWith('http')) {
+          cacheLocalImage(storagePath, photos[i].uri).catch(() => {});
+        }
+      });
+
       setLoading(false);
-      
+
       // OPTIMISTIC UI: Show success immediately, sync in background
       const photoWithLocation = photos.find(p => p.location);
       const validBuilders = builders.filter(b => b.name || b.phoneNumber);
@@ -1071,6 +1140,7 @@ export default function AddPropertyScreen() {
         poolProperty,
         parkProperty,
         gatedProperty,
+        cornerProperty,
         propertyAge: propertyAge ? parseInt(propertyAge) : null,
         ageType: ageType || null,
         case: caseType || null,
@@ -1189,6 +1259,8 @@ export default function AddPropertyScreen() {
           ]}
           keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={true}
+          onScroll={(e) => { scrollPositionRef.current = e.nativeEvent.contentOffset.y; }}
+          scrollEventThrottle={16}
         >
           <View style={styles.formContainer}>
             {/* Header with Refresh button */}
@@ -1419,25 +1491,26 @@ export default function AddPropertyScreen() {
                       placeholderTextColor="#666"
                       value={builder.name}
                       onChangeText={(text) => updateBuilder(index, 'name', text)}
+                      returnKeyType="next"
+                      blurOnSubmit={false}
                     />
                     <View style={styles.phoneContainer}>
-                      <TouchableOpacity 
-                        style={styles.countryCodeDropdown}
-                        onPress={() => {
-                          const currentIndex = COUNTRY_CODES.indexOf(builder.countryCode || '+91');
-                          const nextIndex = (currentIndex + 1) % COUNTRY_CODES.length;
-                          updateBuilder(index, 'countryCode', COUNTRY_CODES[nextIndex]);
-                        }}
-                      >
-                        <Text style={styles.countryCodeText}>{builder.countryCode || '+91'}</Text>
-                      </TouchableOpacity>
+                      <View style={styles.countryCodeFixed}>
+                        <Text style={styles.countryCodeText}>+91</Text>
+                      </View>
                       <TextInput
                         style={[styles.input, styles.builderPhoneInput]}
-                        placeholder="Phone"
+                        placeholder="Phone (10 digits)"
                         placeholderTextColor="#666"
                         value={builder.phoneNumber}
-                        onChangeText={(text) => updateBuilder(index, 'phoneNumber', text)}
+                        onChangeText={(text) => {
+                          const digits = text.replace(/[^0-9]/g, '').slice(0, 10);
+                          updateBuilder(index, 'phoneNumber', digits);
+                        }}
                         keyboardType="phone-pad"
+                        maxLength={10}
+                        returnKeyType="next"
+                        blurOnSubmit={false}
                       />
                     </View>
                   </View>
@@ -1449,18 +1522,218 @@ export default function AddPropertyScreen() {
                       <Ionicons name="close-circle" size={20} color="#ff4444" />
                     </TouchableOpacity>
                   )}
-                  {errors[`builderPhone_${index}`] && (
-                    <Text style={styles.errorText}>{errors[`builderPhone_${index}`]}</Text>
+                  {builder.phoneNumber && builder.phoneNumber.length > 0 && builder.phoneNumber.length !== 10 && (
+                    <Text style={styles.errorText}>
+                      {builder.phoneNumber.length < 10 ? `${10 - builder.phoneNumber.length} more digits needed` : 'Too many digits'}
+                    </Text>
                   )}
                 </View>
               ))}
               <TouchableOpacity style={styles.addBuilderButton} onPress={addBuilder}>
-                <Ionicons name="add-circle-outline" size={20} color="#4CAF50" />
+                <Ionicons name="add-circle-outline" size={20} color="#aaa" />
                 <Text style={styles.addBuilderText}>Add Builder</Text>
               </TouchableOpacity>
             </View>
 
-            {/* 5. Case Type */}
+            {/* 5. Size/Area */}
+            <View style={styles.section}>
+              <Text style={styles.label}>Size / Area</Text>
+            
+              {sizes.map((size, index) => (
+                <View key={index} style={styles.sizeEntry}>
+                  <View style={styles.sizeRow}>
+                    <Text style={styles.sizeTypeLabel}>{getSizeLabel(size.type)}</Text>
+                    <TouchableOpacity onPress={() => removeSize(index)} style={styles.removeButton}>
+                      <Ionicons name="close-circle" size={20} color="#ff4444" />
+                    </TouchableOpacity>
+                  </View>
+                  <View style={styles.sizeInputRow}>
+                    <TextInput
+                      style={[styles.input, styles.sizeInputCombined]}
+                      placeholder="0"
+                      placeholderTextColor="#666"
+                      value={size.value > 0 ? size.value.toString() : ''}
+                      onChangeText={(text) => updateSize(index, 'value', parseFloat(text) || 0)}
+                      keyboardType="decimal-pad"
+                    />
+                    <TouchableOpacity
+                      style={styles.unitSuffix}
+                      onPress={() => setShowSizeUnitDropdown(showSizeUnitDropdown === index ? null : index)}
+                    >
+                      <Text style={styles.unitSuffixText}>{getSizeUnitLabel(size.unit)}</Text>
+                      <Ionicons name="chevron-down" size={14} color="#999" />
+                    </TouchableOpacity>
+                  </View>
+                  {showSizeUnitDropdown === index && (
+                    <View style={styles.dropdownList}>
+                      {SIZE_UNITS.map((unit) => (
+                        <TouchableOpacity
+                          key={unit.value}
+                          style={[
+                            styles.dropdownItem,
+                            size.unit === unit.value && styles.dropdownItemSelected,
+                          ]}
+                          onPress={() => {
+                            updateSize(index, 'unit', unit.value);
+                            setShowSizeUnitDropdown(null);
+                          }}
+                        >
+                          <Text style={[
+                            styles.dropdownItemText,
+                            size.unit === unit.value && styles.dropdownItemTextSelected,
+                          ]}>
+                            {unit.label}
+                          </Text>
+                        </TouchableOpacity>
+                      ))}
+                    </View>
+                  )}
+                </View>
+              ))}
+
+              <View style={styles.addSizeButtons}>
+                {!sizes.find(s => s.type === 'carpet') && (
+                  <TouchableOpacity
+                    style={styles.addSizeButton}
+                    onPress={() => addSize('carpet')}
+                  >
+                    <Ionicons name="add" size={16} color="#aaa" />
+                    <Text style={styles.addSizeButtonText}>Carpet</Text>
+                  </TouchableOpacity>
+                )}
+                {!sizes.find(s => s.type === 'builtup') && (
+                  <TouchableOpacity
+                    style={styles.addSizeButton}
+                    onPress={() => addSize('builtup')}
+                  >
+                    <Ionicons name="add" size={16} color="#aaa" />
+                    <Text style={styles.addSizeButtonText}>Built-up</Text>
+                  </TouchableOpacity>
+                )}
+                {!sizes.find(s => s.type === 'superbuiltup') && (
+                  <TouchableOpacity
+                    style={styles.addSizeButton}
+                    onPress={() => addSize('superbuiltup')}
+                  >
+                    <Ionicons name="add" size={16} color="#aaa" />
+                    <Text style={styles.addSizeButtonText}>Super Built-up</Text>
+                  </TouchableOpacity>
+                )}
+              </View>
+            </View>
+
+            {/* 6. Property Features */}
+            <View style={styles.section}>
+              <Text style={styles.label}>Property Features</Text>
+              <View style={styles.featureContainer}>
+                <TouchableOpacity
+                  style={styles.featureItem}
+                  onPress={() => setClubProperty(!clubProperty)}
+                >
+                  <Ionicons
+                    name={clubProperty ? 'checkbox' : 'square-outline'}
+                    size={24}
+                    color="#fff"
+                  />
+                  <Text style={styles.featureText}>Club</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={styles.featureItem}
+                  onPress={() => setPoolProperty(!poolProperty)}
+                >
+                  <Ionicons
+                    name={poolProperty ? 'checkbox' : 'square-outline'}
+                    size={24}
+                    color="#fff"
+                  />
+                  <Text style={styles.featureText}>Pool</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={styles.featureItem}
+                  onPress={() => setParkProperty(!parkProperty)}
+                >
+                  <Ionicons
+                    name={parkProperty ? 'checkbox' : 'square-outline'}
+                    size={24}
+                    color="#fff"
+                  />
+                  <Text style={styles.featureText}>Park</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={styles.featureItem}
+                  onPress={() => setGatedProperty(!gatedProperty)}
+                >
+                  <Ionicons
+                    name={gatedProperty ? 'checkbox' : 'square-outline'}
+                    size={24}
+                    color="#fff"
+                  />
+                  <Text style={styles.featureText}>Gated</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={styles.featureItem}
+                  onPress={() => setCornerProperty(!cornerProperty)}
+                >
+                  <Ionicons
+                    name={cornerProperty ? 'checkbox' : 'square-outline'}
+                    size={24}
+                    color="#fff"
+                  />
+                  <Text style={styles.featureText}>Corner</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+
+            {/* 7. Address */}
+            <View style={styles.section}>
+              <Text style={styles.label}>Address</Text>
+              <View style={styles.addressRow}>
+                <TextInput
+                  style={[styles.input, { flex: 1 }]}
+                  placeholder={showTowerField ? "Society Name" : "Unit No"}
+                  placeholderTextColor="#666"
+                  value={address.unitNo}
+                  onChangeText={(text) => setAddress({ ...address, unitNo: text })}
+                />
+                <TextInput
+                  style={[styles.input, { flex: 0.7 }]}
+                  placeholder="Block"
+                  placeholderTextColor="#666"
+                  value={address.block}
+                  onChangeText={(text) => setAddress({ ...address, block: text })}
+                />
+                <TextInput
+                  style={[styles.input, { flex: 1 }]}
+                  placeholder="Sector"
+                  placeholderTextColor="#666"
+                  keyboardType="number-pad"
+                  value={address.sector}
+                  onChangeText={(text) => setAddress({ ...address, sector: text.replace(/[^0-9]/g, '') })}
+                />
+              </View>
+              <View style={styles.addressRow}>
+                <TextInput
+                  style={[styles.input, styles.addressInputSmall]}
+                  placeholder="Area"
+                  placeholderTextColor="#666"
+                  value={address.area}
+                  onChangeText={(text) => setAddress({ ...address, area: text })}
+                />
+                <TextInput
+                  style={[styles.input, styles.addressInputSmall]}
+                  placeholder="City"
+                  placeholderTextColor="#666"
+                  value={address.city}
+                  onChangeText={(text) => setAddress({ ...address, city: text })}
+                />
+              </View>
+            </View>
+
+            {/* 8. Case Type */}
             <View style={styles.section}>
               <Text style={styles.label}>Case Type</Text>
               <View style={styles.chipContainer}>
@@ -1486,7 +1759,7 @@ export default function AddPropertyScreen() {
               </View>
             </View>
 
-            {/* 5.5 BHK (for residential: Builder Floor, Villa/House, Apartment Society) */}
+            {/* 8.5 BHK (for residential: Builder Floor, Villa/House, Apartment Society) */}
             {showBhkField && (
               <View style={styles.section}>
                 <Text style={styles.label}>BHK</Text>
@@ -1498,11 +1771,13 @@ export default function AddPropertyScreen() {
                   onChangeText={(text) => setBhk(text.replace(/[^0-9]/g, ''))}
                   keyboardType="numeric"
                   maxLength={2}
+                  returnKeyType="next"
+                  blurOnSubmit={false}
                 />
               </View>
             )}
 
-            {/* 6. Price */}
+            {/* 9. Price */}
             {needsMultipleFloors ? (
               <View style={styles.section}>
                 <Text style={styles.label}>{showTowerField ? 'Tower, Floor & Price' : 'Floor & Price'}</Text>
@@ -1564,7 +1839,7 @@ export default function AddPropertyScreen() {
                   </View>
                 ))}
                 <TouchableOpacity style={styles.addFloorButton} onPress={addFloor}>
-                  <Ionicons name="add-circle-outline" size={20} color="#4CAF50" />
+                  <Ionicons name="add-circle-outline" size={20} color="#aaa" />
                   <Text style={styles.addFloorText}>Add {showTowerField ? 'Unit' : 'Floor'}</Text>
                 </TouchableOpacity>
               </View>
@@ -1591,129 +1866,6 @@ export default function AddPropertyScreen() {
                 />
               </View>
             )}
-
-            {/* 7. Address */}
-            <View style={styles.section}>
-              <Text style={styles.label}>Address</Text>
-              <View style={styles.addressRow}>
-                <TextInput
-                  style={[styles.input, showTowerField ? styles.addressInputLarge : styles.addressInputSmall]}
-                  placeholder={showTowerField ? "Society Name" : "Unit No"}
-                  placeholderTextColor="#666"
-                  value={address.unitNo}
-                  onChangeText={(text) => setAddress({ ...address, unitNo: text })}
-                />
-                <TextInput
-                  style={[styles.input, showTowerField ? styles.addressInputXSmall : styles.addressInputSmall]}
-                  placeholder="Block"
-                  placeholderTextColor="#666"
-                  value={address.block}
-                  onChangeText={(text) => setAddress({ ...address, block: text })}
-                />
-              </View>
-              <View style={styles.addressRow}>
-                <TextInput
-                  style={[styles.input, styles.addressInputSmall]}
-                  placeholder="Sector/Area"
-                  placeholderTextColor="#666"
-                  value={address.sector}
-                  onChangeText={(text) => setAddress({ ...address, sector: text })}
-                />
-                <TextInput
-                  style={[styles.input, styles.addressInputSmall]}
-                  placeholder="City"
-                  placeholderTextColor="#666"
-                  value={address.city}
-                  onChangeText={(text) => setAddress({ ...address, city: text })}
-                />
-              </View>
-            </View>
-
-            {/* 8. Size/Area */}
-            <View style={styles.section}>
-              <Text style={styles.label}>Size / Area</Text>
-              <Text style={styles.subLabel}>Add property dimensions</Text>
-              
-              {sizes.map((size, index) => (
-                <View key={index} style={styles.sizeEntry}>
-                  <Text style={styles.sizeTypeLabel}>{getSizeLabel(size.type)}</Text>
-                  <View style={styles.sizeRow}>
-                    <TextInput
-                      style={[styles.input, styles.sizeInput]}
-                      placeholder="0"
-                      placeholderTextColor="#666"
-                      value={size.value > 0 ? size.value.toString() : ''}
-                      onChangeText={(text) => updateSize(index, 'value', parseFloat(text) || 0)}
-                      keyboardType="decimal-pad"
-                    />
-                    <TouchableOpacity 
-                      style={styles.unitDropdown}
-                      onPress={() => setShowSizeUnitDropdown(showSizeUnitDropdown === index ? null : index)}
-                    >
-                      <Text style={styles.unitText}>{getSizeUnitLabel(size.unit)}</Text>
-                      <Ionicons name="chevron-down" size={16} color="#fff" />
-                    </TouchableOpacity>
-                    <TouchableOpacity onPress={() => removeSize(index)} style={styles.removeButton}>
-                      <Ionicons name="close-circle" size={24} color="#ff4444" />
-                    </TouchableOpacity>
-                  </View>
-                  {showSizeUnitDropdown === index && (
-                    <View style={styles.dropdownList}>
-                      {SIZE_UNITS.map((unit) => (
-                        <TouchableOpacity
-                          key={unit.value}
-                          style={[
-                            styles.dropdownItem,
-                            size.unit === unit.value && styles.dropdownItemSelected,
-                          ]}
-                          onPress={() => {
-                            updateSize(index, 'unit', unit.value);
-                            setShowSizeUnitDropdown(null);
-                          }}
-                        >
-                          <Text style={[
-                            styles.dropdownItemText,
-                            size.unit === unit.value && styles.dropdownItemTextSelected,
-                          ]}>
-                            {unit.label}
-                          </Text>
-                        </TouchableOpacity>
-                      ))}
-                    </View>
-                  )}
-                </View>
-              ))}
-              
-              <View style={styles.addSizeButtons}>
-                {!sizes.find(s => s.type === 'carpet') && (
-                  <TouchableOpacity 
-                    style={styles.addSizeButton} 
-                    onPress={() => addSize('carpet')}
-                  >
-                    <Ionicons name="add" size={16} color="#4CAF50" />
-                    <Text style={styles.addSizeButtonText}>Carpet</Text>
-                  </TouchableOpacity>
-                )}
-                {!sizes.find(s => s.type === 'builtup') && (
-                  <TouchableOpacity 
-                    style={styles.addSizeButton} 
-                    onPress={() => addSize('builtup')}
-                  >
-                    <Ionicons name="add" size={16} color="#4CAF50" />
-                    <Text style={styles.addSizeButtonText}>Built-up</Text>
-                  </TouchableOpacity>
-                )}
-                {!sizes.find(s => s.type === 'superbuiltup') && (
-                  <TouchableOpacity 
-                    style={styles.addSizeButton} 
-                    onPress={() => addSize('superbuiltup')}
-                  >
-                    <Ionicons name="add" size={16} color="#4CAF50" />
-                    <Text style={styles.addSizeButtonText}>Super Built-up</Text>
-                  </TouchableOpacity>
-                )}
-              </View>
-            </View>
 
             {/* 9. Age Type */}
             <View style={styles.section}>
@@ -1878,7 +2030,7 @@ export default function AddPropertyScreen() {
                       <Ionicons 
                         name={file.mimeType?.includes('pdf') ? 'document-text' : 'image'} 
                         size={20} 
-                        color="#4CAF50" 
+                        color="#aaa" 
                       />
                       <Text style={styles.fileName} numberOfLines={1}>{file.name}</Text>
                       <TouchableOpacity 
@@ -1891,60 +2043,6 @@ export default function AddPropertyScreen() {
                   ))}
                 </View>
               )}
-            </View>
-
-            {/* Property Features */}
-            <View style={styles.section}>
-              <Text style={styles.label}>Property Features</Text>
-              <View style={styles.featureContainer}>
-                <TouchableOpacity
-                  style={styles.featureItem}
-                  onPress={() => setClubProperty(!clubProperty)}
-                >
-                  <Ionicons
-                    name={clubProperty ? 'checkbox' : 'square-outline'}
-                    size={24}
-                    color="#fff"
-                  />
-                  <Text style={styles.featureText}>Club</Text>
-                </TouchableOpacity>
-
-                <TouchableOpacity
-                  style={styles.featureItem}
-                  onPress={() => setPoolProperty(!poolProperty)}
-                >
-                  <Ionicons
-                    name={poolProperty ? 'checkbox' : 'square-outline'}
-                    size={24}
-                    color="#fff"
-                  />
-                  <Text style={styles.featureText}>Pool</Text>
-                </TouchableOpacity>
-
-                <TouchableOpacity
-                  style={styles.featureItem}
-                  onPress={() => setParkProperty(!parkProperty)}
-                >
-                  <Ionicons
-                    name={parkProperty ? 'checkbox' : 'square-outline'}
-                    size={24}
-                    color="#fff"
-                  />
-                  <Text style={styles.featureText}>Park</Text>
-                </TouchableOpacity>
-
-                <TouchableOpacity
-                  style={styles.featureItem}
-                  onPress={() => setGatedProperty(!gatedProperty)}
-                >
-                  <Ionicons
-                    name={gatedProperty ? 'checkbox' : 'square-outline'}
-                    size={24}
-                    color="#fff"
-                  />
-                  <Text style={styles.featureText}>Gated</Text>
-                </TouchableOpacity>
-              </View>
             </View>
 
             {/* Additional Notes */}
@@ -2513,7 +2611,7 @@ const styles = StyleSheet.create({
     marginTop: 4,
   },
   addFloorText: {
-    color: '#4CAF50',
+    color: '#aaa',
     fontSize: 14,
     fontWeight: '600',
   },
@@ -2523,13 +2621,42 @@ const styles = StyleSheet.create({
   },
   sizeTypeLabel: {
     color: '#999',
-    fontSize: 12,
-    marginBottom: 4,
+    fontSize: 13,
+    flex: 1,
   },
   sizeRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
+    justifyContent: 'space-between',
+    marginBottom: 6,
+  },
+  sizeInputRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#1a1a1a',
+    borderWidth: 1,
+    borderColor: '#333',
+    borderRadius: 12,
+    overflow: 'hidden',
+  },
+  sizeInputCombined: {
+    flex: 1,
+    borderWidth: 0,
+    borderRadius: 0,
+  },
+  unitSuffix: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 12,
+    paddingVertical: 14,
+    borderLeftWidth: 1,
+    borderLeftColor: '#333',
+    backgroundColor: '#222',
+  },
+  unitSuffixText: {
+    color: '#ccc',
+    fontSize: 13,
   },
   sizeInput: {
     flex: 1,
@@ -2543,18 +2670,18 @@ const styles = StyleSheet.create({
   addSizeButton: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 4,
+    gap: 6,
     backgroundColor: '#1a1a1a',
     borderWidth: 1,
-    borderColor: '#4CAF50',
-    borderRadius: 16,
-    paddingHorizontal: 12,
-    paddingVertical: 6,
+    borderColor: '#333',
+    borderRadius: 8,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
   },
   addSizeButtonText: {
-    color: '#4CAF50',
-    fontSize: 12,
-    fontWeight: '600',
+    color: '#ccc',
+    fontSize: 13,
+    fontWeight: '400',
   },
   removeButton: {
     padding: 4,
@@ -2584,6 +2711,15 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
     justifyContent: 'center',
   },
+  countryCodeFixed: {
+    backgroundColor: '#222',
+    borderWidth: 1,
+    borderColor: '#333',
+    borderTopLeftRadius: 12,
+    borderBottomLeftRadius: 12,
+    paddingHorizontal: 12,
+    justifyContent: 'center',
+  },
   countryCodeText: {
     color: '#fff',
     fontSize: 14,
@@ -2609,7 +2745,7 @@ const styles = StyleSheet.create({
     padding: 8,
   },
   addBuilderText: {
-    color: '#4CAF50',
+    color: '#aaa',
     fontSize: 14,
     fontWeight: '600',
   },
@@ -2639,7 +2775,7 @@ const styles = StyleSheet.create({
   attachButton: {
     backgroundColor: '#1a1a1a',
     borderWidth: 1,
-    borderColor: '#4CAF50',
+    borderColor: '#555',
     borderRadius: 12,
     padding: 16,
     flexDirection: 'row',

@@ -100,12 +100,9 @@ export default function MapScreen() {
 
   const fetchPropertiesInBackground = async () => {
     try {
-      const response = await api.get('/properties');
-      const allProperties = response.data || [];
-      const withLocation = allProperties.filter((p: Property) => p.latitude && p.longitude);
-      await cacheProperties(allProperties);
-      resetRefreshFlag();
-      setProperties(withLocation);
+      const response = await api.get('/properties/map-pins');
+      const pins = response.data || [];
+      setProperties(pins);
     } catch (error) {
       console.error('Background fetch error:', error);
     }
@@ -114,12 +111,9 @@ export default function MapScreen() {
   const fetchProperties = async () => {
     try {
       setLoading(true);
-      const response = await api.get('/properties');
-      const allProperties = response.data || [];
-      const withLocation = allProperties.filter((p: Property) => p.latitude && p.longitude);
-      await cacheProperties(allProperties);
-      resetRefreshFlag();
-      setProperties(withLocation);
+      const response = await api.get('/properties/map-pins');
+      const pins = response.data || [];
+      setProperties(pins);
     } catch (error) {
       console.error('Error fetching properties:', error);
     } finally {

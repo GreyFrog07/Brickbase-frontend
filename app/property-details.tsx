@@ -10,6 +10,8 @@ import {
   TouchableOpacity,
   Alert,
   Linking,
+  Modal,
+  Platform,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useLocalSearchParams, router } from 'expo-router';
@@ -19,6 +21,8 @@ import * as VideoThumbnails from 'expo-video-thumbnails';
 import api from '../lib/api';
 import WhatsAppShareModal from '../components/property/WhatsAppShareModal';
 import FullscreenMediaViewer from '../components/property/FullscreenMediaViewer';
+import MapView, { Marker, PROVIDER_GOOGLE } from 'react-native-maps';
+import CachedImage from '../components/CachedImage';
 
 const { width } = Dimensions.get('window');
 
@@ -31,6 +35,9 @@ export default function PropertyDetailsScreen() {
   const [showShareModal, setShowShareModal] = useState(false);
   const [fullscreenIndex, setFullscreenIndex] = useState<number | null>(null);
   const [videoThumbs, setVideoThumbs] = useState<Record<number, string>>({});
+  const [showMapModal, setShowMapModal] = useState(false);
+  const [nearbyProperties, setNearbyProperties] = useState<Property[]>([]);
+  const [loadingNearby, setLoadingNearby] = useState(false);
 
   useEffect(() => {
     if (propertyId) {
@@ -147,7 +154,28 @@ export default function PropertyDetailsScreen() {
     return email.charAt(0).toUpperCase();
   };
 
-  const hasMultipleFloors = property?.floors && property.floors.length > 0 && 
+  const fetchNearbyProperties = async () => {
+    if (!property?.latitude || !property?.longitude) return;
+    setLoadingNearby(true);
+    try {
+      const response = await api.get('/properties');
+      const all: Property[] = response.data;
+      const nearby = all.filter(p => {
+        if (!p.latitude || !p.longitude || p.id === property.id) return false;
+        const dlat = p.latitude - property.latitude!;
+        const dlng = p.longitude - property.longitude!;
+        const dist = Math.sqrt(dlat * dlat + dlng * dlng);
+        return dist < 0.05; // ~5km radius
+      });
+      setNearbyProperties(nearby);
+    } catch (error) {
+      console.log('Failed to fetch nearby:', error);
+    } finally {
+      setLoadingNearby(false);
+    }
+  };
+
+  const hasMultipleFloors = property?.floors && property.floors.length > 0 &&
     (property.propertyType === 'Builder Floor' || property.propertyType === 'Apartment Society');
 
   if (loading) {
@@ -171,9 +199,20 @@ export default function PropertyDetailsScreen() {
   if (property.poolProperty) features.push({ icon: 'water', text: 'Pool' });
   if (property.parkProperty) features.push({ icon: 'leaf', text: 'Park' });
   if (property.gatedProperty) features.push({ icon: 'lock-closed', text: 'Gated' });
+  if ((property as any).cornerProperty) features.push({ icon: 'flag', text: 'Corner' });
 
-  const builderName = property.builders?.[0]?.name || property.builderName;
-  const hasBuilder = builderName || property.builders?.[0]?.phoneNumber || property.builderPhone;
+  // Collect all builders for display
+  const allBuilders: { name: string; phone: string | null }[] = [];
+  if (property.builders && property.builders.length > 0) {
+    property.builders.forEach(b => {
+      if (b.name || b.phoneNumber) {
+        allBuilders.push({ name: b.name || 'Unknown', phone: b.phoneNumber || null });
+      }
+    });
+  } else if (property.builderName || property.builderPhone) {
+    allBuilders.push({ name: property.builderName || 'Unknown', phone: property.builderPhone || null });
+  }
+  const hasBuilder = allBuilders.length > 0;
 
   // Combined media for fullscreen viewer
   const photos = property.propertyPhotos || [];
@@ -208,7 +247,7 @@ export default function PropertyDetailsScreen() {
                   activeOpacity={0.9}
                   onPress={() => setFullscreenIndex(index)}
                 >
-                  <Image source={{ uri: photo }} style={styles.image} />
+                  <CachedImage uri={photo} style={styles.image} />
                 </TouchableOpacity>
               ))}
             </ScrollView>
@@ -247,7 +286,7 @@ export default function PropertyDetailsScreen() {
                   onPress={() => setFullscreenIndex(photos.length + index)}
                 >
                   {videoThumbs[index] ? (
-                    <Image source={{ uri: videoThumbs[index] }} style={styles.videoThumbImage} />
+                    <CachedImage uri={videoThumbs[index]} style={styles.videoThumbImage} />
                   ) : (
                     <Ionicons name="videocam" size={24} color="#888" />
                   )}
@@ -315,42 +354,59 @@ export default function PropertyDetailsScreen() {
             </View>
           )}
 
-          {/* Call Builder Section */}
+          {/* Builder Section - all builders with inline buttons */}
           {hasBuilder && (
             <View style={styles.callBuilderSection}>
-              <View style={styles.builderInfo}>
-                <Text style={styles.builderLabel}>Builder</Text>
-                <Text style={styles.builderName}>{builderName || 'Contact Available'}</Text>
-              </View>
-              <View style={styles.callButtons}>
-                <TouchableOpacity style={styles.callButton} onPress={handleCall}>
-                  <Ionicons name="call" size={20} color="#fff" />
-                  <Text style={styles.callButtonText}>Call</Text>
-                </TouchableOpacity>
-                <TouchableOpacity style={[styles.callButton, styles.whatsappCallButton]} onPress={handleWhatsApp}>
-                  <Ionicons name="logo-whatsapp" size={20} color="#fff" />
-                  <Text style={styles.callButtonText}>WhatsApp</Text>
-                </TouchableOpacity>
-              </View>
+              <Text style={styles.builderLabel}>Builders</Text>
+              {allBuilders.map((builder, idx) => (
+                <View key={idx} style={styles.builderRow}>
+                  <Text style={styles.builderName} numberOfLines={1}>{builder.name}</Text>
+                  <View style={styles.builderActions}>
+                    <TouchableOpacity
+                      style={[styles.builderActionBtn, !builder.phone && styles.builderActionBtnDisabled]}
+                      disabled={!builder.phone}
+                      onPress={() => {
+                        if (builder.phone) Linking.openURL(`tel:+91${builder.phone}`);
+                      }}
+                    >
+                      <Ionicons name="call" size={16} color={builder.phone ? '#fff' : '#555'} />
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={[styles.builderActionBtn, !builder.phone && styles.builderActionBtnDisabled]}
+                      disabled={!builder.phone}
+                      onPress={() => {
+                        if (builder.phone) Linking.openURL(`https://wa.me/91${builder.phone}`);
+                      }}
+                    >
+                      <Ionicons name="logo-whatsapp" size={16} color={builder.phone ? '#fff' : '#555'} />
+                    </TouchableOpacity>
+                  </View>
+                </View>
+              ))}
             </View>
           )}
 
           {/* Address */}
-          {property.address && (property.address.unitNo || property.address.block || property.address.sector || property.address.city) && (
+          {property.address && (property.address.unitNo || property.address.block || property.address.sector || property.address.area || property.address.city) && (
             <View style={styles.section}>
               <Text style={styles.sectionTitle}>Address</Text>
               <View style={styles.addressCard}>
                 {(property.address.unitNo || property.address.block) && (
                   <Text style={styles.addressLine}>
-                    {property.address.unitNo && `Unit ${property.address.unitNo}`}
+                    {property.address.unitNo && `${property.address.unitNo}`}
                     {property.address.unitNo && property.address.block && ', '}
                     {property.address.block && `Block ${property.address.block}`}
                   </Text>
                 )}
-                {(property.address.sector || property.address.city) && (
+                {property.address.sector && (
                   <Text style={styles.addressLine}>
-                    {property.address.sector}
-                    {property.address.sector && property.address.city && ', '}
+                    Sector-{property.address.sector}
+                  </Text>
+                )}
+                {(property.address.area || property.address.city) && (
+                  <Text style={styles.addressLine}>
+                    {property.address.area}
+                    {property.address.area && property.address.city && ', '}
                     {property.address.city}
                   </Text>
                 )}
@@ -491,16 +547,52 @@ export default function PropertyDetailsScreen() {
             </View>
           )}
 
-          {/* Location */}
+          {/* Location with Map Preview */}
           {property.latitude && property.longitude && (
             <View style={styles.section}>
               <Text style={styles.sectionTitle}>Location</Text>
-              <View style={styles.locationItem}>
-                <Ionicons name="location" size={20} color="#4CAF50" />
-                <Text style={styles.locationText}>
-                  {property.latitude.toFixed(6)}, {property.longitude.toFixed(6)}
-                </Text>
-              </View>
+              <TouchableOpacity
+                activeOpacity={0.9}
+                onPress={() => setShowMapModal(true)}
+                style={styles.mapPreviewContainer}
+              >
+                {Platform.OS !== 'web' ? (
+                  <MapView
+                    style={styles.mapPreview}
+                    provider={PROVIDER_GOOGLE}
+                    initialRegion={{
+                      latitude: property.latitude,
+                      longitude: property.longitude,
+                      latitudeDelta: 0.005,
+                      longitudeDelta: 0.005,
+                    }}
+                    scrollEnabled={false}
+                    zoomEnabled={false}
+                    rotateEnabled={false}
+                    pitchEnabled={false}
+                    pointerEvents="none"
+                  >
+                    <Marker
+                      coordinate={{
+                        latitude: property.latitude,
+                        longitude: property.longitude,
+                      }}
+                    />
+                  </MapView>
+                ) : (
+                  <View style={[styles.mapPreview, { justifyContent: 'center', alignItems: 'center', backgroundColor: '#222' }]}>
+                    <Ionicons name="map" size={40} color="#666" />
+                    <Text style={{ color: '#999', marginTop: 8, fontSize: 13 }}>Map preview (mobile only)</Text>
+                  </View>
+                )}
+                <View style={styles.mapOverlayHint}>
+                  <Ionicons name="expand" size={16} color="#fff" />
+                  <Text style={styles.mapOverlayText}>Tap to expand</Text>
+                </View>
+              </TouchableOpacity>
+              <Text style={styles.coordsText}>
+                {property.latitude.toFixed(6)}, {property.longitude.toFixed(6)}
+              </Text>
             </View>
           )}
 
@@ -516,6 +608,95 @@ export default function PropertyDetailsScreen() {
           </View>
         </View>
       </ScrollView>
+
+      {/* Full Map Modal */}
+      {property.latitude && property.longitude && (
+        <Modal
+          visible={showMapModal}
+          animationType="slide"
+          presentationStyle="fullScreen"
+          onRequestClose={() => { setShowMapModal(false); setNearbyProperties([]); }}
+        >
+          <View style={styles.mapModalContainer}>
+            {Platform.OS !== 'web' ? (
+              <MapView
+                style={StyleSheet.absoluteFillObject}
+                provider={PROVIDER_GOOGLE}
+                initialRegion={{
+                  latitude: property.latitude,
+                  longitude: property.longitude,
+                  latitudeDelta: 0.02,
+                  longitudeDelta: 0.02,
+                }}
+              >
+                <Marker
+                  coordinate={{
+                    latitude: property.latitude,
+                    longitude: property.longitude,
+                  }}
+                  pinColor="#ff4444"
+                  title={property.propertyType || 'Property'}
+                  description={formatPrice(property.price, property.priceUnit)}
+                />
+                {nearbyProperties.map(np => (
+                  <Marker
+                    key={np.id}
+                    coordinate={{
+                      latitude: np.latitude!,
+                      longitude: np.longitude!,
+                    }}
+                    pinColor="#4CAF50"
+                    title={np.propertyType || 'Property'}
+                    description={formatPrice(np.price, np.priceUnit)}
+                    onCalloutPress={() => {
+                      setShowMapModal(false);
+                      setNearbyProperties([]);
+                      router.push({ pathname: '/property-details', params: { propertyId: np.id } });
+                    }}
+                  />
+                ))}
+              </MapView>
+            ) : (
+              <View style={[StyleSheet.absoluteFillObject, { justifyContent: 'center', alignItems: 'center', backgroundColor: '#111' }]}>
+                <Ionicons name="map" size={64} color="#666" />
+                <Text style={{ color: '#999', marginTop: 12 }}>Map available on mobile</Text>
+              </View>
+            )}
+
+            {/* Close button */}
+            <TouchableOpacity
+              style={styles.mapCloseBtn}
+              onPress={() => { setShowMapModal(false); setNearbyProperties([]); }}
+            >
+              <Ionicons name="close" size={24} color="#fff" />
+            </TouchableOpacity>
+
+            {/* Show Nearby Properties button */}
+            <View style={styles.mapBottomBar}>
+              {nearbyProperties.length > 0 ? (
+                <Text style={styles.nearbyCountText}>
+                  {nearbyProperties.length} nearby {nearbyProperties.length === 1 ? 'property' : 'properties'}
+                </Text>
+              ) : (
+                <TouchableOpacity
+                  style={styles.nearbyBtn}
+                  onPress={fetchNearbyProperties}
+                  disabled={loadingNearby}
+                >
+                  {loadingNearby ? (
+                    <ActivityIndicator size="small" color="#fff" />
+                  ) : (
+                    <>
+                      <Ionicons name="locate" size={18} color="#fff" />
+                      <Text style={styles.nearbyBtnText}>Show Nearby Properties</Text>
+                    </>
+                  )}
+                </TouchableOpacity>
+              )}
+            </View>
+          </View>
+        </Modal>
+      )}
 
       {/* WhatsApp Share Modal */}
       <WhatsAppShareModal
@@ -763,40 +944,41 @@ const styles = StyleSheet.create({
     padding: 16,
     marginBottom: 24,
   },
-  builderInfo: {
-    marginBottom: 12,
-  },
   builderLabel: {
     color: '#999',
     fontSize: 12,
-    marginBottom: 4,
+    marginBottom: 10,
+  },
+  builderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 8,
+    borderBottomWidth: 0.5,
+    borderBottomColor: '#333',
   },
   builderName: {
     color: '#fff',
-    fontSize: 18,
+    fontSize: 16,
     fontWeight: '600',
-  },
-  callButtons: {
-    flexDirection: 'row',
-    gap: 12,
-  },
-  callButton: {
     flex: 1,
+    marginRight: 12,
+  },
+  builderActions: {
     flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
     gap: 8,
-    backgroundColor: '#4CAF50',
-    borderRadius: 8,
-    padding: 12,
   },
-  whatsappCallButton: {
-    backgroundColor: '#25D366',
+  builderActionBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: 'rgba(255,255,255,0.1)',
+    justifyContent: 'center',
+    alignItems: 'center',
   },
-  callButtonText: {
-    color: '#fff',
-    fontSize: 14,
-    fontWeight: '600',
+  builderActionBtnDisabled: {
+    backgroundColor: 'rgba(255,255,255,0.03)',
+    opacity: 0.4,
   },
   section: {
     marginBottom: 24,
@@ -926,18 +1108,85 @@ const styles = StyleSheet.create({
     fontSize: 14,
     lineHeight: 22,
   },
-  locationItem: {
+  mapPreviewContainer: {
+    borderRadius: 12,
+    overflow: 'hidden',
+    backgroundColor: '#1a1a1a',
+  },
+  mapPreview: {
+    width: '100%',
+    height: 180,
+    borderRadius: 12,
+  },
+  mapOverlayHint: {
+    position: 'absolute',
+    bottom: 10,
+    right: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: 'rgba(0,0,0,0.6)',
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 16,
+  },
+  mapOverlayText: {
+    color: '#fff',
+    fontSize: 12,
+    fontWeight: '500',
+  },
+  coordsText: {
+    color: '#666',
+    fontSize: 12,
+    fontFamily: 'monospace',
+    marginTop: 8,
+  },
+  // Full map modal
+  mapModalContainer: {
+    flex: 1,
+    backgroundColor: '#000',
+  },
+  mapCloseBtn: {
+    position: 'absolute',
+    top: 50,
+    right: 16,
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: 'rgba(0,0,0,0.7)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 10,
+  },
+  mapBottomBar: {
+    position: 'absolute',
+    bottom: 40,
+    left: 0,
+    right: 0,
+    alignItems: 'center',
+  },
+  nearbyBtn: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
-    backgroundColor: '#1a1a1a',
-    padding: 16,
-    borderRadius: 12,
+    backgroundColor: 'rgba(30,30,30,0.9)',
+    paddingHorizontal: 20,
+    paddingVertical: 14,
+    borderRadius: 30,
   },
-  locationText: {
+  nearbyBtnText: {
+    color: '#fff',
+    fontSize: 15,
+    fontWeight: '600',
+  },
+  nearbyCountText: {
     color: '#fff',
     fontSize: 14,
-    fontFamily: 'monospace',
+    fontWeight: '500',
+    backgroundColor: 'rgba(30,30,30,0.9)',
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+    borderRadius: 30,
   },
   // Bottom action buttons
   bottomActions: {
