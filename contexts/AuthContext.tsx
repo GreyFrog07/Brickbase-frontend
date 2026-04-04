@@ -2,7 +2,7 @@ import React, { createContext, useState, useEffect, useContext } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { router } from 'expo-router';
 import api from '../lib/api';
-import { clearAllCache } from '../lib/cache';
+// Property cache is per-user keyed — no need to clear on logout
 import { authEvents } from '../lib/authEvents';
 
 interface User {
@@ -45,9 +45,11 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
 
   // Listen for session-expired events from the API interceptor
   useEffect(() => {
-    const unsubscribe = authEvents.onSessionExpired(() => {
+    const unsubscribe = authEvents.onSessionExpired(async () => {
       setUser(null);
-      clearAllCache();
+      await AsyncStorage.removeItem('access_token');
+      await AsyncStorage.removeItem('refresh_token');
+      await AsyncStorage.removeItem('user');
       router.replace('/login');
     });
     return unsubscribe;
@@ -69,7 +71,6 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
           await AsyncStorage.setItem('user', JSON.stringify(response.data));
         } catch (error) {
           // Token invalid and refresh also failed — interceptor already emitted session-expired
-          await clearAllCache();
           await AsyncStorage.removeItem('access_token');
           await AsyncStorage.removeItem('refresh_token');
           await AsyncStorage.removeItem('user');
@@ -104,10 +105,12 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
   };
 
   const signOut = async () => {
-    await clearAllCache();
+    // Only clear session tokens — property cache is per-user keyed
+    // and persists for fast re-login experience
     await AsyncStorage.removeItem('access_token');
     await AsyncStorage.removeItem('refresh_token');
     await AsyncStorage.removeItem('user');
+    await AsyncStorage.removeItem('add_property_draft');
     setUser(null);
     router.replace('/login');
   };

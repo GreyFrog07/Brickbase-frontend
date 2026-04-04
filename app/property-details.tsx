@@ -19,6 +19,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { Property, FloorEntry, SIZE_UNITS } from '../types/property';
 import * as VideoThumbnails from 'expo-video-thumbnails';
 import api from '../lib/api';
+import { useProperties } from '../contexts/PropertyContext';
 import WhatsAppShareModal from '../components/property/WhatsAppShareModal';
 import FullscreenMediaViewer from '../components/property/FullscreenMediaViewer';
 import MapView, { Marker, PROVIDER_GOOGLE } from 'react-native-maps';
@@ -29,6 +30,7 @@ const { width } = Dimensions.get('window');
 export default function PropertyDetailsScreen() {
   const { propertyId } = useLocalSearchParams();
   const insets = useSafeAreaInsets();
+  const { properties: allProperties, removePropertyFromState } = useProperties();
   const [property, setProperty] = useState<Property | null>(null);
   const [loading, setLoading] = useState(true);
   const [currentImageIndex, setCurrentImageIndex] = useState(0);
@@ -41,7 +43,7 @@ export default function PropertyDetailsScreen() {
 
   useEffect(() => {
     if (propertyId) {
-      fetchPropertyDetails();
+      loadPropertyDetails();
     }
   }, [propertyId]);
 
@@ -56,7 +58,16 @@ export default function PropertyDetailsScreen() {
     });
   }, [property?.propertyVideos]);
 
-  const fetchPropertyDetails = async () => {
+  const loadPropertyDetails = async () => {
+    // Try local state first (instant)
+    const localProperty = allProperties.find(p => p.id === propertyId);
+    if (localProperty) {
+      setProperty(localProperty);
+      setLoading(false);
+      return;
+    }
+
+    // Fallback to API if not in local state (edge case)
     try {
       setLoading(true);
       const response = await api.get(`/properties/${propertyId}`);
@@ -79,13 +90,17 @@ export default function PropertyDetailsScreen() {
           text: 'Delete',
           style: 'destructive',
           onPress: async () => {
+            // Optimistic: remove from local state immediately
+            removePropertyFromState(propertyId as string);
+            router.back();
+
+            // Sync delete in background
             try {
               await api.delete(`/properties/${propertyId}`);
-              Alert.alert('Success', 'Property deleted successfully', [
-                { text: 'OK', onPress: () => router.back() },
-              ]);
+              console.log('Property deleted from server');
             } catch (error: any) {
-              Alert.alert('Error', error.response?.data?.detail || 'Failed to delete property');
+              console.error('Failed to delete from server:', error);
+              Alert.alert('Sync Issue', 'Property removed locally but failed to delete from server.');
             }
           },
         },
@@ -154,13 +169,12 @@ export default function PropertyDetailsScreen() {
     return email.charAt(0).toUpperCase();
   };
 
-  const fetchNearbyProperties = async () => {
+  const fetchNearbyProperties = () => {
     if (!property?.latitude || !property?.longitude) return;
     setLoadingNearby(true);
     try {
-      const response = await api.get('/properties');
-      const all: Property[] = response.data;
-      const nearby = all.filter(p => {
+      // Use local state instead of API call
+      const nearby = allProperties.filter(p => {
         if (!p.latitude || !p.longitude || p.id === property.id) return false;
         const dlat = p.latitude - property.latitude!;
         const dlng = p.longitude - property.longitude!;
@@ -169,7 +183,7 @@ export default function PropertyDetailsScreen() {
       });
       setNearbyProperties(nearby);
     } catch (error) {
-      console.log('Failed to fetch nearby:', error);
+      console.log('Failed to compute nearby:', error);
     } finally {
       setLoadingNearby(false);
     }

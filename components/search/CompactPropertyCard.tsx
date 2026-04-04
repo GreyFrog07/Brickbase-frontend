@@ -67,6 +67,7 @@ export default function CompactPropertyCard({ property, onPress, onShare }: Comp
   };
 
   const isCorner = (property as any).cornerProperty;
+  const coverPhotoPath = property.coverPhotoPath;
   const coverIndex = property.coverPhotoIndex ?? 0;
   const coverPhoto = property.propertyPhotos?.[coverIndex] || property.propertyPhotos?.[0];
   const bhkInfo = property.bhk ? `${property.bhk} BHK` : null;
@@ -86,8 +87,13 @@ export default function CompactPropertyCard({ property, onPress, onShare }: Comp
   return (
     <TouchableOpacity style={styles.card} onPress={onPress} activeOpacity={0.9}>
       {/* Thumbnail */}
-      {coverPhoto ? (
-        <CachedImage uri={coverPhoto} style={styles.thumbnail} />
+      {(coverPhotoPath || coverPhoto) ? (
+        <CachedImage
+          storagePath={coverPhotoPath}
+          bucket={coverPhotoPath ? 'property-photos' : undefined}
+          uri={!coverPhotoPath ? coverPhoto : undefined}
+          style={styles.thumbnail}
+        />
       ) : (
         <View style={[styles.thumbnail, styles.placeholderThumb]}>
           <Ionicons name="image-outline" size={28} color="#555" />

@@ -51,8 +51,9 @@ import {
 } from '../../types/property';
 import { useLocalSearchParams, router, useFocusEffect } from 'expo-router';
 import api from '../../lib/api';
-import { setNewPropertyAdded } from '../../lib/cache';
+import { addToPendingQueue } from '../../lib/cache';
 import { cacheLocalImage } from '../../lib/imageCache';
+import { useProperties } from '../../contexts/PropertyContext';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 const MAX_CONTENT_WIDTH = 500;
@@ -119,6 +120,7 @@ function FullscreenVideoItem({ uri, index, total, isActive }: { uri: string; ind
 
 export default function AddPropertyScreen() {
   const { user } = useAuth();
+  const { addPropertyToState, updatePropertyInState, replacePropertyInState } = useProperties();
   const params = useLocalSearchParams();
   const editPropertyId = params.editPropertyId as string | undefined;
   const insets = useSafeAreaInsets();
@@ -1150,28 +1152,42 @@ export default function AddPropertyScreen() {
       };
 
       if (isEditMode && editPropertyId) {
-        // OPTIMISTIC: Show success immediately for edit too
-        setNewPropertyAdded(true);
+        // OPTIMISTIC: Update local state immediately
+        updatePropertyInState(editPropertyId, {
+          ...propertyData,
+          id: editPropertyId,
+          createdAt: undefined,
+          updatedAt: new Date().toISOString(),
+        } as any);
+
         Alert.alert('Success', 'Property updated! Syncing...', [
           { text: 'OK', onPress: () => router.back() },
         ]);
-        
-        // Sync in background without blocking UI
+
+        // Sync in background
         syncPropertyUpdateInBackground(editPropertyId, propertyData);
       } else {
-        // OPTIMISTIC: Show success immediately
+        // OPTIMISTIC: Add to local state with temp ID
+        const tempId = `temp_${Date.now()}`;
+        const tempProperty = {
+          ...propertyData,
+          id: tempId,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+          coverPhotoPath: photoUrls[coverPhotoIndex] || '',
+        } as any;
+
+        addPropertyToState(tempProperty);
+
         Alert.alert('Success', ' Property added! ', [
           { text: 'OK', onPress: async () => {
             await clearFormDraft();
             resetForm();
           }},
         ]);
-        
-        // Mark cache as needing refresh so search/map will update
-        setNewPropertyAdded(true);
-        
-        // Sync in background without blocking UI
-        syncPropertyInBackground(propertyData);
+
+        // Add to pending queue and sync in background
+        syncPropertyInBackground(propertyData, tempId);
       }
     } catch (error: any) {
       setLoading(false);
@@ -1182,12 +1198,19 @@ export default function AddPropertyScreen() {
   };
 
   // Background sync function for new properties
-  const syncPropertyInBackground = async (propertyData: any) => {
+  const syncPropertyInBackground = async (propertyData: any, tempId: string) => {
     try {
-      await api.post('/properties', propertyData);
+      const response = await api.post('/properties', propertyData);
+      const realProperty = response.data;
+      // Replace temp property with real one from server
+      replacePropertyInState(tempId, realProperty);
       console.log('Property synced successfully');
     } catch (error: any) {
       console.error('Background sync failed:', error);
+      // Add to pending queue for retry on next app open
+      if (user) {
+        await addToPendingQueue(user.id, { ...propertyData, _tempId: tempId });
+      }
       Alert.alert(
         'Sync Issue',
         'Property was saved locally but failed to sync. It will retry automatically.',
@@ -1205,7 +1228,7 @@ export default function AddPropertyScreen() {
       console.error('Background update sync failed:', error);
       Alert.alert(
         'Sync Issue',
-        'Property update was initiated but failed to sync. It will retry automatically.',
+        'Property update was initiated but failed to sync. Please try again.',
         [{ text: 'OK' }]
       );
     }

@@ -1,5 +1,6 @@
 import * as FileSystem from 'expo-file-system';
 import { Platform } from 'react-native';
+import { signStorageUrl } from './supabase';
 
 const CACHE_DIR = `${FileSystem.documentDirectory}image_cache/`;
 
@@ -121,6 +122,50 @@ export async function getImageCacheSize(): Promise<number> {
     if (info.exists && info.size) total += info.size;
   }
   return total;
+}
+
+/**
+ * Get a locally cached URI for an image using its raw storage path.
+ * Signs the URL client-side if not cached, then downloads and caches it.
+ * A photo is signed + downloaded exactly ONCE per device, then served from disk forever.
+ *
+ * @param bucket - Storage bucket name (e.g. 'property-photos')
+ * @param storagePath - Raw storage path (e.g. 'user_folder/property_id/photo.jpg')
+ * @returns Local file:// URI
+ */
+export async function getCachedImageForPath(bucket: string, storagePath: string): Promise<string> {
+  if (!storagePath) return '';
+
+  const filename = pathToFilename(storagePath);
+
+  // 1. Check in-memory cache (fastest)
+  if (memoryCache[filename]) return memoryCache[filename];
+
+  await ensureCacheDir();
+  const localUri = CACHE_DIR + filename;
+
+  // 2. Check if file exists on disk
+  const info = await FileSystem.getInfoAsync(localUri);
+  if (info.exists && info.size && info.size > 0) {
+    memoryCache[filename] = localUri;
+    return localUri;
+  }
+
+  // 3. Sign URL client-side, download, and cache
+  try {
+    const signedUrl = await signStorageUrl(bucket, storagePath);
+    if (!signedUrl) return '';
+
+    const result = await FileSystem.downloadAsync(signedUrl, localUri);
+    if (result.status === 200) {
+      memoryCache[filename] = localUri;
+      return localUri;
+    }
+  } catch (error) {
+    console.log('Image cache download from path failed:', error);
+  }
+
+  return '';
 }
 
 /**

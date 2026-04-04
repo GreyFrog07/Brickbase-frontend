@@ -63,6 +63,7 @@ export interface Property {
   propertyPhotos: string[];
   propertyVideos?: string[];
   coverPhotoIndex?: number;
+  coverPhotoPath?: string;  // Raw storage path (no signed URL) for local-first caching
   floor?: number; // Legacy single floor
   floors?: FloorEntry[]; // New multiple floors
   price?: number;

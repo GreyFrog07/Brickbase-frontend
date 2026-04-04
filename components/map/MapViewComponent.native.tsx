@@ -1,9 +1,10 @@
 import React, { forwardRef, useImperativeHandle, useRef, useState, useMemo, useCallback } from 'react';
-import { View, Text, StyleSheet, Image } from 'react-native';
+import { View, Text, StyleSheet } from 'react-native';
 import MapView, { Marker, PROVIDER_GOOGLE, Region } from 'react-native-maps';
 import { Ionicons } from '@expo/vector-icons';
 import { Property } from '../../types/property';
 import Supercluster from 'supercluster';
+import CachedImage from '../CachedImage';
 
 export interface MapViewComponentProps {
   filteredProperties: Property[];
@@ -49,7 +50,7 @@ function PropertyMarker({
   formatPrice: (p: Property) => string;
   onPress: () => void;
 }) {
-  const [imageLoaded, setImageLoaded] = useState(false);
+  // Image loading is handled by CachedImage internally
 
   return (
     <Marker
@@ -58,15 +59,16 @@ function PropertyMarker({
         longitude: property.longitude!,
       }}
       onPress={onPress}
-      tracksViewChanges={coverPhoto ? !imageLoaded : false}
+      tracksViewChanges={false}
     >
       <View style={styles.markerWrapper}>
         <View style={styles.markerCard}>
           {coverPhoto ? (
-            <Image
-              source={{ uri: coverPhoto }}
+            <CachedImage
+              storagePath={coverPhoto.startsWith('http') ? undefined : coverPhoto}
+              bucket={coverPhoto.startsWith('http') ? undefined : 'property-photos'}
+              uri={coverPhoto.startsWith('http') ? coverPhoto : undefined}
               style={styles.markerImage}
-              onLoad={() => setImageLoaded(true)}
             />
           ) : (
             <View style={styles.markerPlaceholder}>

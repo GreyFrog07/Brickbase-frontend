@@ -70,6 +70,7 @@ export default function GridPropertyCard({
     ).catch(() => Alert.alert("Error", "WhatsApp not installed"));
   };
 
+  const coverPhotoPath = property.coverPhotoPath;
   const image =
     property.propertyPhotos?.[property.coverPhotoIndex ?? 0] ||
     property.propertyPhotos?.[0];
@@ -89,8 +90,13 @@ export default function GridPropertyCard({
 
   return (
     <TouchableOpacity style={styles.card} onPress={onPress} activeOpacity={0.9}>
-      {image ? (
-        <CachedImage uri={image} style={styles.image} />
+      {(coverPhotoPath || image) ? (
+        <CachedImage
+          storagePath={coverPhotoPath}
+          bucket={coverPhotoPath ? 'property-photos' : undefined}
+          uri={!coverPhotoPath ? image : undefined}
+          style={styles.image}
+        />
       ) : (
         <View style={styles.placeholder}>
           <Ionicons name="image-outline" size={28} color="#666" />

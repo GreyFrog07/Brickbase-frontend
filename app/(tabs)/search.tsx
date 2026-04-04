@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -13,6 +13,7 @@ import {
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../../contexts/AuthContext';
+import { useProperties } from '../../contexts/PropertyContext';
 import {
   Property,
   PropertyCategory,
@@ -22,29 +23,18 @@ import {
   COMMERCIAL_PROPERTY_TYPES,
   CASE_TYPES,
 } from '../../types/property';
-import { router, useFocusEffect } from 'expo-router';
+import { router } from 'expo-router';
 import GridPropertyCard from '../../components/search/GridPropertyCard';
 import CompactPropertyCard from '../../components/search/CompactPropertyCard';
 import WhatsAppShareModal from '../../components/property/WhatsAppShareModal';
-import api from '../../lib/api';
-import {
-  getCachedProperties,
-  cacheProperties,
-  isCacheValid,
-  shouldRefreshCache,
-  resetRefreshFlag,
-} from '../../lib/cache';
 
 export default function SearchScreen() {
   const { user } = useAuth();
   const insets = useSafeAreaInsets();
-  const [properties, setProperties] = useState<Property[]>([]);
+  const { properties, loading, refreshing, onRefresh } = useProperties();
   const [filteredProperties, setFilteredProperties] = useState<Property[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
   const [shareProperty, setShareProperty] = useState<Property | null>(null);
   const [showFilters, setShowFilters] = useState(false);
-  const [initialLoadDone, setInitialLoadDone] = useState(false);
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
 
   // Filters
@@ -55,90 +45,9 @@ export default function SearchScreen() {
   const [minPrice, setMinPrice] = useState('');
   const [maxPrice, setMaxPrice] = useState('');
 
-  // Load from cache first, then check if refresh needed
-  useFocusEffect(
-    useCallback(() => {
-      loadPropertiesWithCache();
-    }, [])
-  );
-
   useEffect(() => {
     applyFilters();
   }, [minPrice, maxPrice, selectedType, searchQuery, properties, propertyCategory, caseType]);
-
-  const loadPropertiesWithCache = async () => {
-    // First, try to load from cache for instant display
-    const cached = await getCachedProperties();
-    if (cached && cached.length > 0) {
-      setProperties(cached);
-      setLoading(false);
-      setInitialLoadDone(true);
-      
-      // Check if we need to refresh (new property added)
-      if (shouldRefreshCache()) {
-        fetchPropertiesInBackground();
-      }
-    } else {
-      // No cache, need to fetch
-      await fetchProperties();
-    }
-  };
-
-  const fetchPropertiesInBackground = async () => {
-    try {
-      const params = new URLSearchParams();
-      const response = await api.get(`/properties?${params.toString()}`);
-      
-      const allProperties = response.data || [];
-      
-      // Update cache
-      await cacheProperties(allProperties);
-      resetRefreshFlag();
-      
-      // Update state
-      setProperties(allProperties);
-    } catch (error) {
-      console.error('Background fetch error:', error);
-    }
-  };
-
-  const fetchProperties = async () => {
-    try {
-      setLoading(true);
-      const params = new URLSearchParams();
-      const response = await api.get(`/properties?${params.toString()}`);
-      
-      const allProperties = response.data || [];
-      
-      // Cache for future use
-      await cacheProperties(allProperties);
-      resetRefreshFlag();
-      
-      setProperties(allProperties);
-    } catch (error) {
-      console.error('Error fetching properties:', error);
-    } finally {
-      setLoading(false);
-      setInitialLoadDone(true);
-    }
-  };
-
-  const onRefresh = async () => {
-    setRefreshing(true);
-    try {
-      const params = new URLSearchParams();
-      const response = await api.get(`/properties?${params.toString()}`);
-      
-      const allProperties = response.data || [];
-      await cacheProperties(allProperties);
-      resetRefreshFlag();
-      setProperties(allProperties);
-    } catch (error) {
-      console.error('Error refreshing properties:', error);
-    } finally {
-      setRefreshing(false);
-    }
-  };
 
   const applyFilters = () => {
     let filtered = [...properties];
@@ -215,7 +124,7 @@ export default function SearchScreen() {
   };
 
   // Show loading only on first load
-  if (loading && !initialLoadDone) {
+  if (loading && properties.length === 0) {
     return (
       <View style={styles.loadingContainer}>
         <ActivityIndicator size="large" color="#fff" />

@@ -1,18 +1,18 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import {
   View,
   Text,
   StyleSheet,
   ActivityIndicator,
   TouchableOpacity,
-  Image,
   Dimensions,
   Platform,
   ScrollView,
 } from 'react-native';
+import CachedImage from '../../components/CachedImage';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as Location from 'expo-location';
-import { useAuth } from '../../contexts/AuthContext';
+import { useProperties } from '../../contexts/PropertyContext';
 import {
   Property,
   PropertyCategory,
@@ -20,15 +20,8 @@ import {
   RESIDENTIAL_PROPERTY_TYPES,
   COMMERCIAL_PROPERTY_TYPES,
 } from '../../types/property';
-import { router, useFocusEffect } from 'expo-router';
+import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import api from '../../lib/api';
-import {
-  getCachedProperties,
-  cacheProperties,
-  shouldRefreshCache,
-  resetRefreshFlag,
-} from '../../lib/cache';
 import NativeMapView, { MapViewHandle } from '../../components/map/MapViewComponent.native';
 
 const { width, height } = Dimensions.get('window');
@@ -49,28 +42,26 @@ function WebMapFallback({ count }: { count: number }) {
 }
 
 export default function MapScreen() {
-  const { user } = useAuth();
   const insets = useSafeAreaInsets();
   const mapViewRef = useRef<MapViewHandle>(null);
-  const [properties, setProperties] = useState<Property[]>([]);
+  const { properties: allProperties, loading } = useProperties();
+
+  // Filter to only properties with location data
+  const propertiesWithLocation = useMemo(
+    () => allProperties.filter(p => p.latitude && p.longitude),
+    [allProperties]
+  );
+
   const [filteredProperties, setFilteredProperties] = useState<Property[]>([]);
-  const [loading, setLoading] = useState(true);
   const [userLocation, setUserLocation] = useState<{ latitude: number; longitude: number } | null>(null);
   const [showFilters, setShowFilters] = useState(false);
   const [selectedProperty, setSelectedProperty] = useState<Property | null>(null);
-  const [initialLoadDone, setInitialLoadDone] = useState(false);
 
   const [mapType, setMapType] = useState<'standard' | 'satellite'>('standard');
   const [isDarkMode, setIsDarkMode] = useState(false);
 
   const [propertyCategory, setPropertyCategory] = useState<PropertyCategory | ''>('');
   const [selectedType, setSelectedType] = useState<PropertyType | ''>();
-
-  useFocusEffect(
-    useCallback(() => {
-      loadPropertiesWithCache();
-    }, [])
-  );
 
   useEffect(() => {
     if (Platform.OS !== 'web') {
@@ -80,46 +71,17 @@ export default function MapScreen() {
 
   useEffect(() => {
     applyFilters();
-  }, [properties, propertyCategory, selectedType]);
+  }, [propertiesWithLocation, propertyCategory, selectedType]);
 
-  const loadPropertiesWithCache = async () => {
-    const cached = await getCachedProperties();
-    if (cached && cached.length > 0) {
-      const withLocation = cached.filter((p: Property) => p.latitude && p.longitude);
-      setProperties(withLocation);
-      setLoading(false);
-      setInitialLoadDone(true);
-
-      if (shouldRefreshCache()) {
-        fetchPropertiesInBackground();
-      }
-    } else {
-      await fetchProperties();
+  const applyFilters = () => {
+    let filtered = [...propertiesWithLocation];
+    if (propertyCategory) {
+      filtered = filtered.filter(p => p.propertyCategory === propertyCategory);
     }
-  };
-
-  const fetchPropertiesInBackground = async () => {
-    try {
-      const response = await api.get('/properties/map-pins');
-      const pins = response.data || [];
-      setProperties(pins);
-    } catch (error) {
-      console.error('Background fetch error:', error);
+    if (selectedType) {
+      filtered = filtered.filter(p => p.propertyType === selectedType);
     }
-  };
-
-  const fetchProperties = async () => {
-    try {
-      setLoading(true);
-      const response = await api.get('/properties/map-pins');
-      const pins = response.data || [];
-      setProperties(pins);
-    } catch (error) {
-      console.error('Error fetching properties:', error);
-    } finally {
-      setLoading(false);
-      setInitialLoadDone(true);
-    }
+    setFilteredProperties(filtered);
   };
 
   const getCurrentLocation = async () => {
@@ -134,17 +96,6 @@ export default function MapScreen() {
     } catch (error) {
       console.error('Error getting location:', error);
     }
-  };
-
-  const applyFilters = () => {
-    let filtered = [...properties];
-    if (propertyCategory) {
-      filtered = filtered.filter(p => p.propertyCategory === propertyCategory);
-    }
-    if (selectedType) {
-      filtered = filtered.filter(p => p.propertyType === selectedType);
-    }
-    setFilteredProperties(filtered);
   };
 
   const hasActiveFilters = !!(propertyCategory || selectedType);
@@ -167,6 +118,8 @@ export default function MapScreen() {
   };
 
   const getCoverPhoto = (property: Property) => {
+    // Prefer raw storage path (local-first), fall back to signed URL
+    if (property.coverPhotoPath) return property.coverPhotoPath;
     if (property.propertyPhotos && property.propertyPhotos.length > 0) {
       const coverIndex = property.coverPhotoIndex || 0;
       return property.propertyPhotos[coverIndex] || property.propertyPhotos[0];
@@ -253,7 +206,7 @@ export default function MapScreen() {
     return { latitude: 28.6139, longitude: 77.209, latitudeDelta: 0.1, longitudeDelta: 0.1 };
   };
 
-  if (loading && !initialLoadDone) {
+  if (loading && propertiesWithLocation.length === 0) {
     return (
       <View style={styles.loadingContainer}>
         <ActivityIndicator size="large" color="#fff" />
@@ -379,8 +332,13 @@ export default function MapScreen() {
             <Ionicons name="close" size={18} color="#fff" />
           </TouchableOpacity>
 
-          {selectedProperty.propertyPhotos?.[0] && (
-            <Image source={{ uri: selectedProperty.propertyPhotos[0] }} style={styles.cardImage} />
+          {(selectedProperty.coverPhotoPath || selectedProperty.propertyPhotos?.[0]) && (
+            <CachedImage
+              storagePath={selectedProperty.coverPhotoPath}
+              bucket={selectedProperty.coverPhotoPath ? 'property-photos' : undefined}
+              uri={!selectedProperty.coverPhotoPath ? selectedProperty.propertyPhotos?.[0] : undefined}
+              style={styles.cardImage}
+            />
           )}
 
           <View style={styles.cardContent}>
