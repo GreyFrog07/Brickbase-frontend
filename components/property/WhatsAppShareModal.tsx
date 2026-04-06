@@ -16,9 +16,10 @@ import {
 import * as Clipboard from 'expo-clipboard';
 import { Ionicons } from '@expo/vector-icons';
 import { Property } from '../../types/property';
-import { File, Paths } from 'expo-file-system/next';
 import * as VideoThumbnails from 'expo-video-thumbnails';
 import * as Sharing from 'expo-sharing';
+import CachedImage from '../CachedImage';
+import { getCachedImageForPath, getCachedImageUri } from '../../lib/imageCache';
 
 // Try to import react-native-share for multi-file sharing (requires dev build)
 let RNShare: any = null;
@@ -123,13 +124,23 @@ export default function WhatsAppShareModal({ visible, property, onClose }: Whats
     }
   }, [visible, property, buildFieldOptions]);
 
-  // Generate video thumbnails
+  // Generate video thumbnails — resolve storage paths to local URIs first
   useEffect(() => {
     if (!visible || !property.propertyVideos) return;
     property.propertyVideos.forEach((videoUrl, index) => {
       if (!videoUrl || videoThumbs[index]) return;
-      VideoThumbnails.getThumbnailAsync(videoUrl, { time: 1000 })
-        .then(({ uri }) => setVideoThumbs(prev => ({ ...prev, [index]: uri })))
+      const isStorage = !videoUrl.startsWith('file://') && !videoUrl.startsWith('http') && !videoUrl.startsWith('/');
+      const resolveUri = isStorage
+        ? getCachedImageForPath('property-videos', videoUrl)
+        : Promise.resolve(videoUrl);
+      resolveUri
+        .then(localUri => {
+          if (!localUri) return;
+          return VideoThumbnails.getThumbnailAsync(localUri, { time: 1000 });
+        })
+        .then(result => {
+          if (result?.uri) setVideoThumbs(prev => ({ ...prev, [index]: result.uri }));
+        })
         .catch(() => {});
     });
   }, [visible, property.propertyVideos]);
@@ -165,41 +176,26 @@ export default function WhatsAppShareModal({ visible, property, onClose }: Whats
     return text;
   };
 
-  // Download a media URL to a local cache file for sharing
-  const downloadMediaToCache = async (
-    url: string, index: number, type: 'photo' | 'video'
+  // Resolve a storage path or URL to a local file URI for sharing
+  const resolveMediaForShare = async (
+    url: string, type: 'photo' | 'video'
   ): Promise<string> => {
     try {
-      const ext = type === 'video' ? 'mp4' : 'jpg';
-      const filename = `property_${type}_${Date.now()}_${index}.${ext}`;
-      const cacheFile = new File(Paths.cache, filename);
-
-      const response = await fetch(url);
-      const arrayBuffer = await response.arrayBuffer();
-      const bytes = new Uint8Array(arrayBuffer);
-
-      await cacheFile.write(bytes);
-      return cacheFile.uri;
+      const isStorage = !url.startsWith('file://') && !url.startsWith('http') && !url.startsWith('/');
+      if (isStorage) {
+        const bucket = type === 'video' ? 'property-videos' : 'property-photos';
+        return await getCachedImageForPath(bucket, url);
+      }
+      if (url.startsWith('file://') || url.startsWith('/')) {
+        return url;
+      }
+      return await getCachedImageUri(url);
     } catch (error) {
-      console.error(`Error downloading ${type} for share:`, error);
+      console.error(`Error resolving ${type} for share:`, error);
       throw error;
     }
   };
 
-  // Clean up temporary files
-  const cleanupFiles = async (fileUris: string[]) => {
-    for (const fileUri of fileUris) {
-      try {
-        const filename = fileUri.split('/').pop();
-        if (filename) {
-          const file = new File(Paths.cache, filename);
-          await file.delete();
-        }
-      } catch (error) {
-        // Ignore cleanup errors
-      }
-    }
-  };
 
   const handleShare = async () => {
     setIsSharing(true);
@@ -218,13 +214,13 @@ export default function WhatsAppShareModal({ visible, property, onClose }: Whats
         return;
       }
 
-      // Download all selected media to cache
+      // Resolve all selected media to local file URIs
       if (hasMedia) {
         const photoFiles = await Promise.all(
-          chosenPhotos.map((url, i) => downloadMediaToCache(url, i, 'photo'))
+          chosenPhotos.map(url => resolveMediaForShare(url, 'photo'))
         );
         const videoFiles = await Promise.all(
-          chosenVideos.map((url, i) => downloadMediaToCache(url, i, 'video'))
+          chosenVideos.map(url => resolveMediaForShare(url, 'video'))
         );
         fileUris = [...photoFiles, ...videoFiles];
       }
@@ -275,10 +271,6 @@ export default function WhatsAppShareModal({ visible, property, onClose }: Whats
       }
     } finally {
       setIsSharing(false);
-
-      if (fileUris.length > 0) {
-        setTimeout(() => cleanupFiles(fileUris), 5000);
-      }
     }
   };
 
@@ -328,7 +320,9 @@ export default function WhatsAppShareModal({ visible, property, onClose }: Whats
                 showsHorizontalScrollIndicator={false}
                 style={styles.photoScroll}
               >
-                {photos.map((photo, index) => (
+                {photos.map((photo, index) => {
+                  const isStorage = !photo.startsWith('file://') && !photo.startsWith('http') && !photo.startsWith('/');
+                  return (
                   <TouchableOpacity
                     key={index}
                     style={[
@@ -339,7 +333,12 @@ export default function WhatsAppShareModal({ visible, property, onClose }: Whats
                     onLongPress={() => setPreviewPhoto(photo)}
                     delayLongPress={500}
                   >
-                    <Image source={{ uri: photo }} style={styles.photo} />
+                    <CachedImage
+                      storagePath={isStorage ? photo : undefined}
+                      bucket={isStorage ? 'property-photos' : undefined}
+                      uri={!isStorage ? photo : undefined}
+                      style={styles.photo}
+                    />
                     {selectedPhotos[index] && (
                       <View style={styles.checkmark}>
                         <Ionicons name="checkmark-circle" size={28} color="#4CAF50" />
@@ -349,7 +348,8 @@ export default function WhatsAppShareModal({ visible, property, onClose }: Whats
                       <View style={styles.mediaOverlay} />
                     )}
                   </TouchableOpacity>
-                ))}
+                  );
+                })}
               </ScrollView>
               <Text style={styles.photoHint}>Long press to preview</Text>
             </View>
@@ -452,13 +452,18 @@ export default function WhatsAppShareModal({ visible, property, onClose }: Whats
             activeOpacity={1}
             onPress={() => setPreviewPhoto(null)}
           >
-            {previewPhoto && (
-              <Image
-                source={{ uri: previewPhoto }}
-                style={styles.previewImage}
-                resizeMode="contain"
-              />
-            )}
+            {previewPhoto && (() => {
+              const isStorage = !previewPhoto.startsWith('file://') && !previewPhoto.startsWith('http') && !previewPhoto.startsWith('/');
+              return (
+                <CachedImage
+                  storagePath={isStorage ? previewPhoto : undefined}
+                  bucket={isStorage ? 'property-photos' : undefined}
+                  uri={!isStorage ? previewPhoto : undefined}
+                  style={styles.previewImage}
+                  resizeMode="contain"
+                />
+              );
+            })()}
             <TouchableOpacity
               style={styles.previewClose}
               onPress={() => setPreviewPhoto(null)}

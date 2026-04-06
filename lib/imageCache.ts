@@ -1,21 +1,19 @@
-import * as FileSystem from 'expo-file-system';
-import { Platform } from 'react-native';
+import { File, Directory, Paths } from 'expo-file-system';
 import { signStorageUrl } from './supabase';
 
-const CACHE_DIR = `${FileSystem.documentDirectory}image_cache/`;
+const CACHE_DIR = new Directory(Paths.document, 'image_cache');
 
-// In-memory lookup: storage_path -> local file URI
+// In-memory lookup: filename -> local file URI
 const memoryCache: Record<string, string> = {};
 
 /**
- * Ensure the cache directory exists.
+ * Ensure the cache directory exists (synchronous with new API).
  */
 let dirReady = false;
-async function ensureCacheDir() {
+function ensureCacheDir() {
   if (dirReady) return;
-  const info = await FileSystem.getInfoAsync(CACHE_DIR);
-  if (!info.exists) {
-    await FileSystem.makeDirectoryAsync(CACHE_DIR, { intermediates: true });
+  if (!CACHE_DIR.exists) {
+    CACHE_DIR.create({ intermediates: true });
   }
   dirReady = true;
 }
@@ -60,30 +58,35 @@ function extractStoragePath(signedUrl: string): string {
 export async function getCachedImageUri(signedUrl: string): Promise<string> {
   if (!signedUrl) return '';
 
+  // Local file URIs (from camera/picker) — use directly, no caching needed
+  if (signedUrl.startsWith('file://') || signedUrl.startsWith('/')) return signedUrl;
+
   const storagePath = extractStoragePath(signedUrl);
   const filename = pathToFilename(storagePath);
 
   // 1. Check in-memory cache (fastest)
   if (memoryCache[filename]) return memoryCache[filename];
 
-  await ensureCacheDir();
-  const localUri = CACHE_DIR + filename;
+  ensureCacheDir();
+  const file = new File(CACHE_DIR, filename);
 
   // 2. Check if file exists on disk
-  const info = await FileSystem.getInfoAsync(localUri);
-  if (info.exists && info.size && info.size > 0) {
-    memoryCache[filename] = localUri;
-    return localUri;
+  if (file.exists && file.size > 0) {
+    memoryCache[filename] = file.uri;
+    return file.uri;
   }
 
   // 3. Download from signed URL and save locally
   try {
-    const result = await FileSystem.downloadAsync(signedUrl, localUri);
-    if (result.status === 200) {
-      memoryCache[filename] = localUri;
-      return localUri;
+    const downloaded = await File.downloadFileAsync(signedUrl, file, { idempotent: true });
+    memoryCache[filename] = downloaded.uri;
+    return downloaded.uri;
+  } catch (error: any) {
+    // Another CachedImage may have downloaded it concurrently — check again
+    if (file.exists && file.size > 0) {
+      memoryCache[filename] = file.uri;
+      return file.uri;
     }
-  } catch (error) {
     console.log('Image cache download failed, using signed URL:', error);
   }
 
@@ -98,28 +101,51 @@ export async function getCachedImageUri(signedUrl: string): Promise<string> {
 export async function cacheLocalImage(storagePath: string, localUri: string): Promise<void> {
   if (!storagePath || !localUri) return;
   const filename = pathToFilename(storagePath);
-  await ensureCacheDir();
-  const destUri = CACHE_DIR + filename;
+  ensureCacheDir();
+  const destFile = new File(CACHE_DIR, filename);
 
   try {
-    // Copy the local file into our cache directory
-    await FileSystem.copyAsync({ from: localUri, to: destUri });
-    memoryCache[filename] = destUri;
-  } catch (error) {
+    // Skip if already cached (e.g. concurrent call or retry)
+    if (destFile.exists && destFile.size > 0) {
+      memoryCache[filename] = destFile.uri;
+      return;
+    }
+    const sourceFile = new File(localUri);
+    sourceFile.copy(destFile);
+    memoryCache[filename] = destFile.uri;
+  } catch (error: any) {
+    // Race condition: another call cached it first
+    if (destFile.exists && destFile.size > 0) {
+      memoryCache[filename] = destFile.uri;
+      return;
+    }
     console.log('Failed to cache local image:', error);
   }
+}
+
+/**
+ * Synchronous check of in-memory cache only.
+ * Returns a file:// URI if the image was previously resolved in this session, or null.
+ * Use this for instant rendering without async delay (e.g. map markers).
+ */
+export function getCachedUriSync(identifier: string): string | null {
+  if (!identifier) return null;
+  if (identifier.startsWith('file://') || identifier.startsWith('/')) return identifier;
+  const filename = pathToFilename(identifier);
+  return memoryCache[filename] || null;
 }
 
 /**
  * Get cache size in bytes.
  */
 export async function getImageCacheSize(): Promise<number> {
-  await ensureCacheDir();
-  const files = await FileSystem.readDirectoryAsync(CACHE_DIR);
+  ensureCacheDir();
+  const entries = CACHE_DIR.list();
   let total = 0;
-  for (const file of files) {
-    const info = await FileSystem.getInfoAsync(CACHE_DIR + file);
-    if (info.exists && info.size) total += info.size;
+  for (const entry of entries) {
+    if (entry instanceof File) {
+      total += entry.size || 0;
+    }
   }
   return total;
 }
@@ -141,14 +167,13 @@ export async function getCachedImageForPath(bucket: string, storagePath: string)
   // 1. Check in-memory cache (fastest)
   if (memoryCache[filename]) return memoryCache[filename];
 
-  await ensureCacheDir();
-  const localUri = CACHE_DIR + filename;
+  ensureCacheDir();
+  const file = new File(CACHE_DIR, filename);
 
   // 2. Check if file exists on disk
-  const info = await FileSystem.getInfoAsync(localUri);
-  if (info.exists && info.size && info.size > 0) {
-    memoryCache[filename] = localUri;
-    return localUri;
+  if (file.exists && file.size > 0) {
+    memoryCache[filename] = file.uri;
+    return file.uri;
   }
 
   // 3. Sign URL client-side, download, and cache
@@ -156,12 +181,15 @@ export async function getCachedImageForPath(bucket: string, storagePath: string)
     const signedUrl = await signStorageUrl(bucket, storagePath);
     if (!signedUrl) return '';
 
-    const result = await FileSystem.downloadAsync(signedUrl, localUri);
-    if (result.status === 200) {
-      memoryCache[filename] = localUri;
-      return localUri;
+    const downloaded = await File.downloadFileAsync(signedUrl, file, { idempotent: true });
+    memoryCache[filename] = downloaded.uri;
+    return downloaded.uri;
+  } catch (error: any) {
+    // Another CachedImage may have downloaded it concurrently — check again
+    if (file.exists && file.size > 0) {
+      memoryCache[filename] = file.uri;
+      return file.uri;
     }
-  } catch (error) {
     console.log('Image cache download from path failed:', error);
   }
 
@@ -173,7 +201,9 @@ export async function getCachedImageForPath(bucket: string, storagePath: string)
  */
 export async function clearImageCache(): Promise<void> {
   try {
-    await FileSystem.deleteAsync(CACHE_DIR, { idempotent: true });
+    if (CACHE_DIR.exists) {
+      CACHE_DIR.delete();
+    }
     dirReady = false;
     Object.keys(memoryCache).forEach(k => delete memoryCache[k]);
   } catch (error) {

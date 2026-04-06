@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import {
   View,
   Text,
@@ -100,7 +100,7 @@ export default function MapScreen() {
 
   const hasActiveFilters = !!(propertyCategory || selectedType);
 
-  const formatPrice = (property: Property) => {
+  const formatPrice = useCallback((property: Property) => {
     if (property.floors && property.floors.length > 0) {
       const minPrice = Math.min(...property.floors.map(f => f.price));
       const maxPrice = Math.max(...property.floors.map(f => f.price));
@@ -115,9 +115,9 @@ export default function MapScreen() {
     if (property.priceUnit === 'cr') return `₹${property.price}Cr`;
     if (property.priceUnit === 'lakh_per_month') return `₹${property.price}L/mo`;
     return `₹${property.price}L`;
-  };
+  }, []);
 
-  const getCoverPhoto = (property: Property) => {
+  const getCoverPhoto = useCallback((property: Property) => {
     // Prefer raw storage path (local-first), fall back to signed URL
     if (property.coverPhotoPath) return property.coverPhotoPath;
     if (property.propertyPhotos && property.propertyPhotos.length > 0) {
@@ -125,7 +125,7 @@ export default function MapScreen() {
       return property.propertyPhotos[coverIndex] || property.propertyPhotos[0];
     }
     return null;
-  };
+  }, []);
 
   const darkMapStyle = [
     { elementType: 'geometry', stylers: [{ color: '#212121' }] },
@@ -144,19 +144,26 @@ export default function MapScreen() {
   ];
 
   const cycleMapType = () => {
-    if (mapType === 'standard' && !isDarkMode) {
-      setIsDarkMode(true);
-    } else if (mapType === 'standard' && isDarkMode) {
-      setIsDarkMode(false);
-      setMapType('satellite');
+    if (Platform.OS === 'ios') {
+      // Apple Maps: toggle between standard and satellite (no dark mode style)
+      setMapType(mapType === 'standard' ? 'satellite' : 'standard');
     } else {
-      setMapType('standard');
-      setIsDarkMode(false);
+      // Google Maps: cycle standard → dark → satellite
+      if (mapType === 'standard' && !isDarkMode) {
+        setIsDarkMode(true);
+      } else if (mapType === 'standard' && isDarkMode) {
+        setIsDarkMode(false);
+        setMapType('satellite');
+      } else {
+        setMapType('standard');
+        setIsDarkMode(false);
+      }
     }
   };
 
   const getMapTypeIcon = () => {
     if (mapType === 'satellite') return 'earth';
+    if (Platform.OS === 'ios') return 'map';
     return isDarkMode ? 'moon' : 'sunny';
   };
 

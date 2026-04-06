@@ -1,14 +1,12 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useMemo, useCallback } from 'react';
 import {
   View,
   Text,
   TextInput,
   TouchableOpacity,
   StyleSheet,
-  ScrollView,
-  ActivityIndicator,
+  FlatList,
   RefreshControl,
-  Linking,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -26,13 +24,13 @@ import {
 import { router } from 'expo-router';
 import GridPropertyCard from '../../components/search/GridPropertyCard';
 import CompactPropertyCard from '../../components/search/CompactPropertyCard';
+import { GridSkeletonCard, CompactSkeletonCard } from '../../components/search/SkeletonCard';
 import WhatsAppShareModal from '../../components/property/WhatsAppShareModal';
 
 export default function SearchScreen() {
   const { user } = useAuth();
   const insets = useSafeAreaInsets();
-  const { properties, loading, refreshing, onRefresh } = useProperties();
-  const [filteredProperties, setFilteredProperties] = useState<Property[]>([]);
+  const { properties, loading, refreshing, syncing, onRefresh } = useProperties();
   const [shareProperty, setShareProperty] = useState<Property | null>(null);
   const [showFilters, setShowFilters] = useState(false);
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
@@ -45,45 +43,40 @@ export default function SearchScreen() {
   const [minPrice, setMinPrice] = useState('');
   const [maxPrice, setMaxPrice] = useState('');
 
-  useEffect(() => {
-    applyFilters();
-  }, [minPrice, maxPrice, selectedType, searchQuery, properties, propertyCategory, caseType]);
-
-  const applyFilters = () => {
-    let filtered = [...properties];
+  // Compute filtered list synchronously — no extra render cycle
+  const filteredProperties = useMemo(() => {
+    let filtered = properties;
 
     if (propertyCategory) {
       filtered = filtered.filter(p => p.propertyCategory === propertyCategory);
     }
-
     if (selectedType) {
       filtered = filtered.filter(p => p.propertyType === selectedType);
     }
-
     if (caseType) {
       filtered = filtered.filter(p => p.case === caseType);
     }
-
     if (minPrice) {
+      const min = parseFloat(minPrice);
       filtered = filtered.filter(p => {
         if (p.floors && p.floors.length > 0) {
-          return p.floors.some(f => f.price >= parseFloat(minPrice));
+          return p.floors.some(f => f.price >= min);
         }
-        return p.price && p.price >= parseFloat(minPrice);
+        return p.price && p.price >= min;
       });
     }
     if (maxPrice) {
+      const max = parseFloat(maxPrice);
       filtered = filtered.filter(p => {
         if (p.floors && p.floors.length > 0) {
-          return p.floors.some(f => f.price <= parseFloat(maxPrice));
+          return p.floors.some(f => f.price <= max);
         }
-        return p.price && p.price <= parseFloat(maxPrice);
+        return p.price && p.price <= max;
       });
     }
-
     if (searchQuery) {
       const query = searchQuery.toLowerCase();
-      filtered = filtered.filter(p => 
+      filtered = filtered.filter(p =>
         p.propertyType?.toLowerCase().includes(query) ||
         p.propertyCategory?.toLowerCase().includes(query) ||
         p.price?.toString().includes(query) ||
@@ -93,8 +86,8 @@ export default function SearchScreen() {
       );
     }
 
-    setFilteredProperties(filtered);
-  };
+    return filtered;
+  }, [properties, searchQuery, propertyCategory, selectedType, caseType, minPrice, maxPrice]);
 
   const clearFilters = () => {
     setSearchQuery('');
@@ -123,19 +116,238 @@ export default function SearchScreen() {
     return [...RESIDENTIAL_PROPERTY_TYPES, ...COMMERCIAL_PROPERTY_TYPES];
   };
 
-  // Show loading only on first load
+  const skeletonFooter = useCallback(() => {
+    if (!syncing && !loading) return null;
+    if (viewMode === 'grid') {
+      return (
+        <View style={styles.skeletonFooter}>
+          <View style={styles.gridRow}>
+            <GridSkeletonCard />
+            <GridSkeletonCard />
+          </View>
+          <View style={[styles.gridRow, { marginTop: 10 }]}>
+            <GridSkeletonCard />
+            <GridSkeletonCard />
+          </View>
+        </View>
+      );
+    }
+    return (
+      <View style={styles.skeletonFooter}>
+        <CompactSkeletonCard />
+        <View style={{ height: 10 }} />
+        <CompactSkeletonCard />
+        <View style={{ height: 10 }} />
+        <CompactSkeletonCard />
+      </View>
+    );
+  }, [syncing, loading, viewMode]);
+
+  const renderItem = useCallback(({ item }: { item: Property }) => {
+    if (viewMode === 'grid') {
+      return (
+        <GridPropertyCard
+          property={item}
+          onPress={() => handlePropertyPress(item)}
+          onShare={() => setShareProperty(item)}
+        />
+      );
+    }
+    return (
+      <View style={styles.listItemWrapper}>
+        <CompactPropertyCard
+          property={item}
+          onPress={() => handlePropertyPress(item)}
+          onShare={() => setShareProperty(item)}
+        />
+      </View>
+    );
+  }, [viewMode]);
+
+  const listHeader = (
+    <>
+      {/* Search Bar */}
+      <View style={styles.searchSection}>
+        <TouchableOpacity
+          style={styles.searchBar}
+          onPress={() => setShowFilters(!showFilters)}
+          activeOpacity={0.8}
+        >
+          <Ionicons name="search" size={20} color="#666" />
+          <TextInput
+            style={styles.searchInput}
+            placeholder="Search properties..."
+            placeholderTextColor="#666"
+            value={searchQuery}
+            onChangeText={setSearchQuery}
+            onFocus={() => setShowFilters(true)}
+          />
+          <TouchableOpacity onPress={() => setShowFilters(!showFilters)}>
+            <Ionicons
+              name={showFilters ? "chevron-up" : "options-outline"}
+              size={22}
+              color="#fff"
+            />
+          </TouchableOpacity>
+        </TouchableOpacity>
+
+        {hasActiveFilters && (
+          <TouchableOpacity style={styles.clearButton} onPress={clearFilters}>
+            <Ionicons name="close-circle" size={16} color="#ff4444" />
+            <Text style={styles.clearButtonText}>Clear All</Text>
+          </TouchableOpacity>
+        )}
+      </View>
+
+      {/* Expanded Filters */}
+      {showFilters && (
+        <View style={styles.filtersContainer}>
+          <View style={styles.filterSection}>
+            <Text style={styles.filterLabel}>Property Category</Text>
+            <FlatList
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              data={['', 'Residential', 'Commercial'] as (PropertyCategory | '')[]}
+              keyExtractor={(item) => item || 'all'}
+              renderItem={({ item: cat }) => (
+                <TouchableOpacity
+                  style={[styles.chip, (cat === '' ? !propertyCategory : propertyCategory === cat) && styles.chipSelected]}
+                  onPress={() => { setPropertyCategory(cat as PropertyCategory | ''); setSelectedType(''); }}
+                >
+                  <Text style={[styles.chipText, (cat === '' ? !propertyCategory : propertyCategory === cat) && styles.chipTextSelected]}>
+                    {cat || 'All'}
+                  </Text>
+                </TouchableOpacity>
+              )}
+              contentContainerStyle={styles.chipContainer}
+            />
+          </View>
+
+          <View style={styles.filterSection}>
+            <Text style={styles.filterLabel}>Property Type</Text>
+            <FlatList
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              data={['', ...getPropertyTypes()] as (PropertyType | '')[]}
+              keyExtractor={(item) => item || 'all'}
+              renderItem={({ item: type }) => (
+                <TouchableOpacity
+                  style={[styles.chip, (type === '' ? !selectedType : selectedType === type) && styles.chipSelected]}
+                  onPress={() => setSelectedType(type as PropertyType | '')}
+                >
+                  <Text style={[styles.chipText, (type === '' ? !selectedType : selectedType === type) && styles.chipTextSelected]}>
+                    {type || 'All'}
+                  </Text>
+                </TouchableOpacity>
+              )}
+              contentContainerStyle={styles.chipContainer}
+            />
+          </View>
+
+          <View style={styles.filterSection}>
+            <Text style={styles.filterLabel}>Case Type</Text>
+            <FlatList
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              data={['', ...CASE_TYPES] as (CaseType | '')[]}
+              keyExtractor={(item) => item || 'all'}
+              renderItem={({ item: type }) => (
+                <TouchableOpacity
+                  style={[styles.chip, (type === '' ? !caseType : caseType === type) && styles.chipSelected]}
+                  onPress={() => setCaseType(type as CaseType | '')}
+                >
+                  <Text style={[styles.chipText, (type === '' ? !caseType : caseType === type) && styles.chipTextSelected]}>
+                    {(type || 'All').replace(/_/g, ' ')}
+                  </Text>
+                </TouchableOpacity>
+              )}
+              contentContainerStyle={styles.chipContainer}
+            />
+          </View>
+
+          <View style={styles.filterSection}>
+            <Text style={styles.filterLabel}>Price Range (Cr)</Text>
+            <View style={styles.priceContainer}>
+              <View style={styles.priceInput}>
+                <TextInput
+                  style={styles.input}
+                  placeholder="Min"
+                  placeholderTextColor="#666"
+                  value={minPrice}
+                  onChangeText={setMinPrice}
+                  keyboardType="decimal-pad"
+                />
+              </View>
+              <Text style={styles.priceSeparator}>-</Text>
+              <View style={styles.priceInput}>
+                <TextInput
+                  style={styles.input}
+                  placeholder="Max"
+                  placeholderTextColor="#666"
+                  value={maxPrice}
+                  onChangeText={setMaxPrice}
+                  keyboardType="decimal-pad"
+                />
+              </View>
+            </View>
+          </View>
+        </View>
+      )}
+
+      {/* Results Count + View Toggle */}
+      <View style={styles.resultsRow}>
+        <Text style={styles.resultsCount}>
+          {filteredProperties.length} {filteredProperties.length === 1 ? 'property' : 'properties'} found
+        </Text>
+        <View style={styles.viewToggle}>
+          <TouchableOpacity
+            style={[styles.toggleBtn, viewMode === 'grid' && styles.toggleBtnActive]}
+            onPress={() => setViewMode('grid')}
+          >
+            <Ionicons name="grid-outline" size={18} color={viewMode === 'grid' ? '#fff' : '#666'} />
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.toggleBtn, viewMode === 'list' && styles.toggleBtnActive]}
+            onPress={() => setViewMode('list')}
+          >
+            <Ionicons name="list-outline" size={18} color={viewMode === 'list' ? '#fff' : '#666'} />
+          </TouchableOpacity>
+        </View>
+      </View>
+    </>
+  );
+
+  // Show skeleton cards on first load (no cached data yet)
   if (loading && properties.length === 0) {
     return (
-      <View style={styles.loadingContainer}>
-        <ActivityIndicator size="large" color="#fff" />
-      </View>
+      <SafeAreaView style={styles.container} edges={['bottom']}>
+        <View style={styles.scrollContent}>
+          {listHeader}
+          {skeletonFooter()}
+        </View>
+      </SafeAreaView>
     );
   }
 
   return (
     <SafeAreaView style={styles.container} edges={['bottom']}>
-      <ScrollView
-        style={styles.scrollView}
+      <FlatList
+        key={viewMode}
+        data={filteredProperties}
+        numColumns={viewMode === 'grid' ? 2 : 1}
+        keyExtractor={(item) => item.id}
+        renderItem={renderItem}
+        ListHeaderComponent={listHeader}
+        ListEmptyComponent={
+          <View style={styles.emptyContainer}>
+            <Ionicons name="search-outline" size={64} color="#666" />
+            <Text style={styles.emptyText}>No properties found</Text>
+            <Text style={styles.emptySubtext}>Try adjusting your filters</Text>
+          </View>
+        }
+        columnWrapperStyle={viewMode === 'grid' ? styles.gridRow : undefined}
+        ItemSeparatorComponent={() => <View style={styles.separator} />}
+        ListFooterComponent={skeletonFooter}
         contentContainerStyle={[
           styles.scrollContent,
           { paddingBottom: Math.max(insets.bottom, 16) + 60 }
@@ -143,204 +355,11 @@ export default function SearchScreen() {
         refreshControl={
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#fff" />
         }
-      >
-        {/* Search Bar */}
-        <View style={styles.searchSection}>
-          <TouchableOpacity 
-            style={styles.searchBar}
-            onPress={() => setShowFilters(!showFilters)}
-            activeOpacity={0.8}
-          >
-            <Ionicons name="search" size={20} color="#666" />
-            <TextInput
-              style={styles.searchInput}
-              placeholder="Search properties..."
-              placeholderTextColor="#666"
-              value={searchQuery}
-              onChangeText={setSearchQuery}
-              onFocus={() => setShowFilters(true)}
-            />
-            <TouchableOpacity onPress={() => setShowFilters(!showFilters)}>
-              <Ionicons 
-                name={showFilters ? "chevron-up" : "options-outline"} 
-                size={22} 
-                color="#fff" 
-              />
-            </TouchableOpacity>
-          </TouchableOpacity>
-
-          {hasActiveFilters && (
-            <TouchableOpacity style={styles.clearButton} onPress={clearFilters}>
-              <Ionicons name="close-circle" size={16} color="#ff4444" />
-              <Text style={styles.clearButtonText}>Clear All</Text>
-            </TouchableOpacity>
-          )}
-        </View>
-
-        {/* Expanded Filters */}
-        {showFilters && (
-          <View style={styles.filtersContainer}>
-            <View style={styles.filterSection}>
-              <Text style={styles.filterLabel}>Property Category</Text>
-              <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-                <View style={styles.chipContainer}>
-                  <TouchableOpacity
-                    style={[styles.chip, !propertyCategory && styles.chipSelected]}
-                    onPress={() => {
-                      setPropertyCategory('');
-                      setSelectedType('');
-                    }}
-                  >
-                    <Text style={[styles.chipText, !propertyCategory && styles.chipTextSelected]}>All</Text>
-                  </TouchableOpacity>
-                  {(['Residential', 'Commercial'] as PropertyCategory[]).map((cat) => (
-                    <TouchableOpacity
-                      key={cat}
-                      style={[styles.chip, propertyCategory === cat && styles.chipSelected]}
-                      onPress={() => {
-                        setPropertyCategory(cat);
-                        setSelectedType('');
-                      }}
-                    >
-                      <Text style={[styles.chipText, propertyCategory === cat && styles.chipTextSelected]}>{cat}</Text>
-                    </TouchableOpacity>
-                  ))}
-                </View>
-              </ScrollView>
-            </View>
-
-            <View style={styles.filterSection}>
-              <Text style={styles.filterLabel}>Property Type</Text>
-              <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-                <View style={styles.chipContainer}>
-                  <TouchableOpacity
-                    style={[styles.chip, !selectedType && styles.chipSelected]}
-                    onPress={() => setSelectedType('')}
-                  >
-                    <Text style={[styles.chipText, !selectedType && styles.chipTextSelected]}>All</Text>
-                  </TouchableOpacity>
-                  {getPropertyTypes().map((type) => (
-                    <TouchableOpacity
-                      key={type}
-                      style={[styles.chip, selectedType === type && styles.chipSelected]}
-                      onPress={() => setSelectedType(type)}
-                    >
-                      <Text style={[styles.chipText, selectedType === type && styles.chipTextSelected]}>{type}</Text>
-                    </TouchableOpacity>
-                  ))}
-                </View>
-              </ScrollView>
-            </View>
-
-            <View style={styles.filterSection}>
-              <Text style={styles.filterLabel}>Case Type</Text>
-              <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-                <View style={styles.chipContainer}>
-                  <TouchableOpacity
-                    style={[styles.chip, !caseType && styles.chipSelected]}
-                    onPress={() => setCaseType('')}
-                  >
-                    <Text style={[styles.chipText, !caseType && styles.chipTextSelected]}>All</Text>
-                  </TouchableOpacity>
-                  {CASE_TYPES.map((type) => (
-                    <TouchableOpacity
-                      key={type}
-                      style={[styles.chip, caseType === type && styles.chipSelected]}
-                      onPress={() => setCaseType(type)}
-                    >
-                      <Text style={[styles.chipText, caseType === type && styles.chipTextSelected]}>
-                        {type.replace(/_/g, ' ')}
-                      </Text>
-                    </TouchableOpacity>
-                  ))}
-                </View>
-              </ScrollView>
-            </View>
-
-            <View style={styles.filterSection}>
-              <Text style={styles.filterLabel}>Price Range (Cr)</Text>
-              <View style={styles.priceContainer}>
-                <View style={styles.priceInput}>
-                  <TextInput
-                    style={styles.input}
-                    placeholder="Min"
-                    placeholderTextColor="#666"
-                    value={minPrice}
-                    onChangeText={setMinPrice}
-                    keyboardType="decimal-pad"
-                  />
-                </View>
-                <Text style={styles.priceSeparator}>-</Text>
-                <View style={styles.priceInput}>
-                  <TextInput
-                    style={styles.input}
-                    placeholder="Max"
-                    placeholderTextColor="#666"
-                    value={maxPrice}
-                    onChangeText={setMaxPrice}
-                    keyboardType="decimal-pad"
-                  />
-                </View>
-              </View>
-            </View>
-
-          </View>
-        )}
-
-        {/* Results Count + View Toggle */}
-        <View style={styles.resultsRow}>
-          <Text style={styles.resultsCount}>
-            {filteredProperties.length} {filteredProperties.length === 1 ? 'property' : 'properties'} found
-          </Text>
-          <View style={styles.viewToggle}>
-            <TouchableOpacity
-              style={[styles.toggleBtn, viewMode === 'grid' && styles.toggleBtnActive]}
-              onPress={() => setViewMode('grid')}
-            >
-              <Ionicons name="grid-outline" size={18} color={viewMode === 'grid' ? '#fff' : '#666'} />
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[styles.toggleBtn, viewMode === 'list' && styles.toggleBtnActive]}
-              onPress={() => setViewMode('list')}
-            >
-              <Ionicons name="list-outline" size={18} color={viewMode === 'list' ? '#fff' : '#666'} />
-            </TouchableOpacity>
-          </View>
-        </View>
-
-        {/* Properties (swipe left/right to toggle view) */}
-        {filteredProperties.length === 0 ? (
-          <View style={styles.emptyContainer}>
-            <Ionicons name="search-outline" size={64} color="#666" />
-            <Text style={styles.emptyText}>No properties found</Text>
-            <Text style={styles.emptySubtext}>
-              Try adjusting your filters
-            </Text>
-          </View>
-        ) : viewMode === 'grid' ? (
-          <View style={styles.gridContainer}>
-            {filteredProperties.map((property) => (
-              <GridPropertyCard
-                key={property.id}
-                property={property}
-                onPress={() => handlePropertyPress(property)}
-                onShare={() => setShareProperty(property)}
-              />
-            ))}
-          </View>
-        ) : (
-          <View style={styles.listContainer}>
-            {filteredProperties.map((property) => (
-              <CompactPropertyCard
-                key={property.id}
-                property={property}
-                onPress={() => handlePropertyPress(property)}
-                onShare={() => setShareProperty(property)}
-              />
-            ))}
-          </View>
-        )}
-      </ScrollView>
+        initialNumToRender={8}
+        maxToRenderPerBatch={8}
+        windowSize={5}
+        removeClippedSubviews
+      />
 
       {/* WhatsApp Share Modal */}
       {shareProperty && (
@@ -364,9 +383,6 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     backgroundColor: '#0c0c0c',
-  },
-  scrollView: {
-    flex: 1,
   },
   scrollContent: {
     paddingBottom: 16,
@@ -499,15 +515,19 @@ const styles = StyleSheet.create({
   toggleBtnActive: {
     backgroundColor: '#333',
   },
-  gridContainer: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
+  gridRow: {
     paddingHorizontal: 16,
     gap: 10,
   },
-  listContainer: {
+  listItemWrapper: {
     paddingHorizontal: 16,
-    gap: 10,
+  },
+  separator: {
+    height: 10,
+  },
+  skeletonFooter: {
+    paddingTop: 10,
+    paddingBottom: 16,
   },
   emptyContainer: {
     flex: 1,

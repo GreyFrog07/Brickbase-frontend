@@ -10,7 +10,7 @@ interface CompactPropertyCardProps {
   onShare?: () => void;
 }
 
-export default function CompactPropertyCard({ property, onPress, onShare }: CompactPropertyCardProps) {
+function CompactPropertyCard({ property, onPress, onShare }: CompactPropertyCardProps) {
   const formatPrice = (price?: number, unit?: string) => {
     if (!price) return null;
     if (unit === 'cr') return `₹${price.toFixed(2)} Cr`;
@@ -241,3 +241,5 @@ const styles = StyleSheet.create({
     padding: 8,
   },
 });
+
+export default React.memo(CompactPropertyCard);

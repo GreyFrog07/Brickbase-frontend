@@ -19,6 +19,7 @@ interface PropertyContextType {
   properties: Property[];
   loading: boolean;
   refreshing: boolean;
+  syncing: boolean; // true while initial paginated sync is fetching more pages
 
   // State mutations — update local state + persist to cache automatically
   addPropertyToState: (property: Property) => void;
@@ -35,6 +36,7 @@ const PropertyContext = createContext<PropertyContextType>({
   properties: [],
   loading: true,
   refreshing: false,
+  syncing: false,
   addPropertyToState: () => {},
   updatePropertyInState: () => {},
   removePropertyFromState: () => {},
@@ -50,6 +52,7 @@ export const PropertyProvider = ({ children }: { children: React.ReactNode }) =>
   const [properties, setProperties] = useState<Property[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [syncing, setSyncing] = useState(false);
   const initialLoadDone = useRef(false);
   const syncInProgress = useRef(false);
 
@@ -65,14 +68,19 @@ export const PropertyProvider = ({ children }: { children: React.ReactNode }) =>
   }, [user]);
 
   // Persist to cache whenever properties change (after initial load)
-  // Skip caching if all we have are temp properties (nothing real to cache)
+  // Debounced to avoid serializing the entire array on every state update
+  // Includes temp properties so they survive reloads while upload is in progress
+  const cacheTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
     if (initialLoadDone.current && properties.length > 0 && user) {
-      const hasRealProperties = properties.some(p => !p.id.startsWith('temp_'));
-      if (hasRealProperties) {
-        cacheProperties(user.id, properties.filter(p => !p.id.startsWith('temp_')));
-      }
+      if (cacheTimeoutRef.current) clearTimeout(cacheTimeoutRef.current);
+      cacheTimeoutRef.current = setTimeout(() => {
+        cacheProperties(user.id, properties);
+      }, 1000);
     }
+    return () => {
+      if (cacheTimeoutRef.current) clearTimeout(cacheTimeoutRef.current);
+    };
   }, [properties, user]);
 
   const loadInitial = async () => {
@@ -109,36 +117,55 @@ export const PropertyProvider = ({ children }: { children: React.ReactNode }) =>
       const lastSync = await getLastSyncAt(user.id);
 
       if (lastSync) {
-        // Incremental sync: only fetch changes since lastSyncAt
+        // Incremental sync: fetch changes + all current IDs for deletion detection
         const response = await api.get('/properties/sync', {
           params: { since: lastSync },
         });
-        const { properties: serverDelta, serverTime } = response.data;
+        const { properties: serverDelta, serverTime, allIds } = response.data;
 
-        if (serverDelta && serverDelta.length > 0) {
-          setProperties(prev => {
-            const tempProperties = prev.filter(p => p.id.startsWith('temp_'));
-            const realProperties = prev.filter(p => !p.id.startsWith('temp_'));
-            const merged = mergeServerProperties(realProperties, serverDelta);
-            return [...tempProperties, ...merged];
-          });
-        }
+        setProperties(prev => {
+          const tempProperties = prev.filter(p => p.id.startsWith('temp_'));
+          let realProperties = prev.filter(p => !p.id.startsWith('temp_'));
+
+          // 1. Merge changed/new properties
+          if (serverDelta && serverDelta.length > 0) {
+            realProperties = mergeServerProperties(realProperties, serverDelta);
+          }
+
+          // 2. Remove properties deleted on server (ID reconciliation)
+          if (allIds) {
+            const serverIdSet = new Set<string>(allIds);
+            realProperties = realProperties.filter(p => serverIdSet.has(p.id));
+          }
+
+          return [...tempProperties, ...realProperties];
+        });
 
         await setLastSyncAt(user.id, serverTime);
       } else {
         // Initial sync: paginated fetch for new device / first login
-        let allProperties: Property[] = [];
+        // Render each page as it arrives so the user sees properties immediately
         let offset = 0;
         const limit = 50;
         let hasMore = true;
+        setSyncing(true);
 
         while (hasMore) {
           const response = await api.get('/properties/sync', {
             params: { limit, offset },
           });
           const { properties: page, serverTime, hasMore: more } = response.data;
+          const pageData = page || [];
 
-          allProperties = [...allProperties, ...(page || [])];
+          // Append this page to state immediately — user sees results as they arrive
+          if (pageData.length > 0) {
+            setProperties(prev => {
+              const tempProperties = prev.filter(p => p.id.startsWith('temp_'));
+              const realProperties = prev.filter(p => !p.id.startsWith('temp_'));
+              return [...tempProperties, ...realProperties, ...pageData];
+            });
+          }
+
           hasMore = more;
           offset += limit;
 
@@ -148,12 +175,14 @@ export const PropertyProvider = ({ children }: { children: React.ReactNode }) =>
           }
         }
 
+        // Cache the final complete set (excluding temp properties)
         setProperties(prev => {
-          const tempProperties = prev.filter(p => p.id.startsWith('temp_'));
-          return [...tempProperties, ...allProperties];
+          const realProperties = prev.filter(p => !p.id.startsWith('temp_'));
+          cacheProperties(user.id, realProperties);
+          return prev;
         });
 
-        await cacheProperties(user.id, allProperties);
+        setSyncing(false);
       }
 
       initialLoadDone.current = true;
@@ -165,7 +194,7 @@ export const PropertyProvider = ({ children }: { children: React.ReactNode }) =>
     }
   };
 
-  // Process pending queue — retry uploads that were interrupted
+  // Process pending queue — retry property creation that was interrupted
   const processPendingQueue = async () => {
     if (!user) return;
     const queue = await getPendingQueue(user.id);
@@ -179,18 +208,38 @@ export const PropertyProvider = ({ children }: { children: React.ReactNode }) =>
           'A property could not be synced after multiple attempts. Please add it again.',
           [{ text: 'OK' }]
         );
+        // Remove the orphaned temp property from state
+        if (item.data._tempId) {
+          setProperties(prev => prev.filter(p => p.id !== item.data._tempId));
+        }
         continue;
       }
 
       try {
         await updatePendingStatus(user.id, item.id, 'syncing', item.retryCount + 1);
+
+        // Send the data as-is — it already includes storage paths if uploads succeeded
         const response = await api.post('/properties', item.data);
         await removeFromPendingQueue(user.id, item.id);
 
         // Replace temp property with real one from server
         if (item.data._tempId) {
           const realProperty: Property = response.data;
-          setProperties(prev => prev.map(p => p.id === item.data._tempId ? realProperty : p));
+          // Only replace if server version has images, or temp had none
+          const tempProp = properties.find(p => p.id === item.data._tempId);
+          const tempHasPhotos = tempProp?.propertyPhotos && tempProp.propertyPhotos.length > 0;
+          const serverHasPhotos = realProperty.propertyPhotos && realProperty.propertyPhotos.length > 0;
+
+          if (!tempHasPhotos || serverHasPhotos) {
+            setProperties(prev => prev.map(p => p.id === item.data._tempId ? realProperty : p));
+          } else {
+            // Server version has no images but temp does — merge: use server ID + temp images
+            setProperties(prev => prev.map(p =>
+              p.id === item.data._tempId
+                ? { ...realProperty, propertyPhotos: p.propertyPhotos, propertyVideos: p.propertyVideos }
+                : p
+            ));
+          }
         }
 
         console.log(`Pending property ${item.id} synced successfully`);
@@ -242,6 +291,7 @@ export const PropertyProvider = ({ children }: { children: React.ReactNode }) =>
       properties,
       loading,
       refreshing,
+      syncing,
       addPropertyToState,
       updatePropertyInState,
       removePropertyFromState,

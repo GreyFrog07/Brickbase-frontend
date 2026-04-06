@@ -1,23 +1,27 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import {
   View,
   Text,
   Modal,
   StyleSheet,
   TouchableOpacity,
-  Image,
   Dimensions,
   FlatList,
   StatusBar,
+  ActivityIndicator,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useVideoPlayer, VideoView } from 'expo-video';
+import CachedImage from '../CachedImage';
+import { getCachedImageForPath, getCachedImageUri } from '../../lib/imageCache';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 
-interface MediaItem {
+export interface MediaItem {
   type: 'photo' | 'video';
   uri: string;
+  storagePath?: string;
+  bucket?: string;
 }
 
 interface FullscreenMediaViewerProps {
@@ -27,13 +31,49 @@ interface FullscreenMediaViewerProps {
   onClose: () => void;
 }
 
-function VideoItem({ uri, isActive }: { uri: string; isActive: boolean }) {
+function VideoItem({ item, isActive }: { item: MediaItem; isActive: boolean }) {
+  const [resolvedUri, setResolvedUri] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    const resolve = async () => {
+      try {
+        let localUri: string;
+        if (item.storagePath && item.bucket) {
+          localUri = await getCachedImageForPath(item.bucket, item.storagePath);
+        } else if (item.uri.startsWith('file://') || item.uri.startsWith('http') || item.uri.startsWith('/')) {
+          localUri = await getCachedImageUri(item.uri);
+        } else {
+          // Raw storage path passed as uri (fallback) — treat as property-videos bucket
+          localUri = await getCachedImageForPath('property-videos', item.uri);
+        }
+        if (!cancelled) setResolvedUri(localUri);
+      } catch {
+        if (!cancelled) setResolvedUri(item.uri);
+      }
+    };
+    resolve();
+    return () => { cancelled = true; };
+  }, [item.uri, item.storagePath, item.bucket]);
+
+  if (!resolvedUri) {
+    return (
+      <View style={styles.mediaPage}>
+        <ActivityIndicator size="large" color="#fff" />
+      </View>
+    );
+  }
+
+  return <VideoPlayer uri={resolvedUri} isActive={isActive} />;
+}
+
+function VideoPlayer({ uri, isActive }: { uri: string; isActive: boolean }) {
   const player = useVideoPlayer(uri, (p) => {
     p.loop = false;
     if (isActive) p.play();
   });
 
-  React.useEffect(() => {
+  useEffect(() => {
     if (isActive) {
       player.play();
     } else {
@@ -75,12 +115,14 @@ export default function FullscreenMediaViewer({
 
   const renderItem = ({ item, index }: { item: MediaItem; index: number }) => {
     if (item.type === 'video') {
-      return <VideoItem uri={item.uri} isActive={index === currentIndex} />;
+      return <VideoItem item={item} isActive={index === currentIndex} />;
     }
     return (
       <View style={styles.mediaPage}>
-        <Image
-          source={{ uri: item.uri }}
+        <CachedImage
+          storagePath={item.storagePath}
+          bucket={item.bucket}
+          uri={!item.storagePath ? item.uri : undefined}
           style={styles.image}
           resizeMode="contain"
         />

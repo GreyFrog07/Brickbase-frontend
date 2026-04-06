@@ -25,7 +25,7 @@ interface Props {
   onShare?: () => void;
 }
 
-export default function GridPropertyCard({
+function GridPropertyCard({
   property,
   onPress,
   onShare,
@@ -307,3 +307,5 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
 });
+
+export default React.memo(GridPropertyCard);

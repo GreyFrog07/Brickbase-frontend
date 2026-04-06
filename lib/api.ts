@@ -6,9 +6,21 @@ const API_URL = process.env.EXPO_PUBLIC_BACKEND_URL;
 
 const api = axios.create({
   baseURL: `${API_URL}/api`,
+  timeout: 60000, // 60s default
   headers: {
     'Content-Type': 'application/json',
   },
+});
+
+// Override timeout for upload requests (large files need more time)
+api.interceptors.request.use((config) => {
+  if (
+    config.headers?.['Content-Type'] === 'multipart/form-data' ||
+    config.url?.includes('/upload')
+  ) {
+    config.timeout = 300000; // 5 minutes for file uploads
+  }
+  return config;
 });
 
 // Add token to requests

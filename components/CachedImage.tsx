@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Image, ImageStyle, StyleProp, View } from 'react-native';
-import { getCachedImageUri, getCachedImageForPath } from '../lib/imageCache';
+import { getCachedImageUri, getCachedImageForPath, getCachedUriSync } from '../lib/imageCache';
 
 interface CachedImageProps {
   /** Signed URL (legacy) — will be cached using extracted storage path */
@@ -11,6 +11,9 @@ interface CachedImageProps {
   bucket?: string;
   style?: StyleProp<ImageStyle>;
   fallback?: React.ReactNode;
+  /** Called when the image has loaded successfully */
+  onLoad?: () => void;
+  resizeMode?: 'cover' | 'contain' | 'stretch' | 'center';
 }
 
 /**
@@ -21,8 +24,13 @@ interface CachedImageProps {
  *
  * Images are downloaded exactly once per device, then served from disk forever.
  */
-export default function CachedImage({ uri, storagePath, bucket, style, fallback }: CachedImageProps) {
-  const [localUri, setLocalUri] = useState<string | null>(null);
+export default function CachedImage({ uri, storagePath, bucket, style, fallback, onLoad, resizeMode }: CachedImageProps) {
+  // Try sync memory cache on first render to avoid flash (critical for map markers)
+  const [localUri, setLocalUri] = useState<string | null>(() => {
+    const source = storagePath || uri;
+    if (!source) return null;
+    return getCachedUriSync(source);
+  });
   const [failed, setFailed] = useState(false);
 
   useEffect(() => {
@@ -32,23 +40,30 @@ export default function CachedImage({ uri, storagePath, bucket, style, fallback 
       return;
     }
 
+    // Check sync cache first (handles source changes after initial mount)
+    const syncUri = getCachedUriSync(source);
+    if (syncUri) {
+      setLocalUri(syncUri);
+      return;
+    }
+
+    // Not in memory cache — resolve asynchronously
+    setLocalUri(null);
     let cancelled = false;
 
     const resolve = async () => {
       try {
         let cached: string;
         if (storagePath && bucket) {
-          // Local-first: sign client-side and cache
           cached = await getCachedImageForPath(bucket, storagePath);
         } else if (uri) {
-          // Legacy: use signed URL directly
           cached = await getCachedImageUri(uri);
         } else {
           return;
         }
         if (!cancelled) setLocalUri(cached || uri || '');
       } catch {
-        if (!cancelled) setLocalUri(uri || ''); // fallback
+        if (!cancelled) setLocalUri(uri || '');
       }
     };
 
@@ -63,6 +78,8 @@ export default function CachedImage({ uri, storagePath, bucket, style, fallback 
     <Image
       source={{ uri: localUri }}
       style={style}
+      resizeMode={resizeMode}
+      onLoad={onLoad}
       onError={() => {
         if (localUri !== uri && uri) {
           setLocalUri(uri);

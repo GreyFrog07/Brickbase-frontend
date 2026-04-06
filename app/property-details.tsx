@@ -24,6 +24,7 @@ import WhatsAppShareModal from '../components/property/WhatsAppShareModal';
 import FullscreenMediaViewer from '../components/property/FullscreenMediaViewer';
 import MapView, { Marker, PROVIDER_GOOGLE } from 'react-native-maps';
 import CachedImage from '../components/CachedImage';
+import { getCachedImageForPath } from '../lib/imageCache';
 
 const { width } = Dimensions.get('window');
 
@@ -47,13 +48,23 @@ export default function PropertyDetailsScreen() {
     }
   }, [propertyId]);
 
-  // Generate video thumbnails
+  // Generate video thumbnails — resolve storage paths to local URIs first
   useEffect(() => {
     if (!property?.propertyVideos) return;
     property.propertyVideos.forEach((videoUrl, index) => {
       if (!videoUrl || videoThumbs[index]) return;
-      VideoThumbnails.getThumbnailAsync(videoUrl, { time: 1000 })
-        .then(({ uri }) => setVideoThumbs(prev => ({ ...prev, [index]: uri })))
+      const isStorage = !videoUrl.startsWith('file://') && !videoUrl.startsWith('http') && !videoUrl.startsWith('/');
+      const resolveUri = isStorage
+        ? getCachedImageForPath('property-videos', videoUrl)
+        : Promise.resolve(videoUrl);
+      resolveUri
+        .then(localUri => {
+          if (!localUri) return;
+          return VideoThumbnails.getThumbnailAsync(localUri, { time: 1000 });
+        })
+        .then(result => {
+          if (result?.uri) setVideoThumbs(prev => ({ ...prev, [index]: result.uri }));
+        })
         .catch(() => {});
     });
   }, [property?.propertyVideos]);
@@ -231,9 +242,18 @@ export default function PropertyDetailsScreen() {
   // Combined media for fullscreen viewer
   const photos = property.propertyPhotos || [];
   const videos = property.propertyVideos || [];
+  const isStoragePath = (p: string) => !p.startsWith('file://') && !p.startsWith('http') && !p.startsWith('/');
   const allMedia = [
-    ...photos.map(uri => ({ type: 'photo' as const, uri })),
-    ...videos.map(uri => ({ type: 'video' as const, uri })),
+    ...photos.map(photo => ({
+      type: 'photo' as const,
+      uri: photo,
+      ...(isStoragePath(photo) ? { storagePath: photo, bucket: 'property-photos' } : {}),
+    })),
+    ...videos.map(video => ({
+      type: 'video' as const,
+      uri: video,
+      ...(isStoragePath(video) ? { storagePath: video, bucket: 'property-videos' } : {}),
+    })),
   ];
 
   return (
@@ -261,7 +281,12 @@ export default function PropertyDetailsScreen() {
                   activeOpacity={0.9}
                   onPress={() => setFullscreenIndex(index)}
                 >
-                  <CachedImage uri={photo} style={styles.image} />
+                  <CachedImage
+                    storagePath={isStoragePath(photo) ? photo : undefined}
+                    bucket={isStoragePath(photo) ? 'property-photos' : undefined}
+                    uri={!isStoragePath(photo) ? photo : undefined}
+                    style={styles.image}
+                  />
                 </TouchableOpacity>
               ))}
             </ScrollView>

@@ -1,9 +1,8 @@
-import React, { forwardRef, useImperativeHandle, useRef, useState, useMemo, useCallback } from 'react';
-import { View, Text, StyleSheet } from 'react-native';
+import React, { forwardRef, useImperativeHandle, useRef, useState, useMemo, useCallback, useEffect } from 'react';
+import { View, Text, StyleSheet, Platform } from 'react-native';
 import MapView, { Marker, PROVIDER_GOOGLE, Region } from 'react-native-maps';
 import { Ionicons } from '@expo/vector-icons';
 import { Property } from '../../types/property';
-import Supercluster from 'supercluster';
 import CachedImage from '../CachedImage';
 
 export interface MapViewComponentProps {
@@ -21,25 +20,11 @@ export interface MapViewHandle {
   animateToRegion: (region: Region, duration?: number) => void;
 }
 
-interface PointProps {
-  property: Property;
-}
+// Track images that have been loaded into marker bitmaps globally.
+// Survives marker unmount/remount so tracksViewChanges stays false.
+const loadedMarkerImages = new Set<string>();
 
-function regionToBBox(region: Region): GeoJSON.BBox {
-  return [
-    region.longitude - region.longitudeDelta / 2,
-    region.latitude - region.latitudeDelta / 2,
-    region.longitude + region.longitudeDelta / 2,
-    region.latitude + region.latitudeDelta / 2,
-  ];
-}
-
-function getZoomLevel(region: Region): number {
-  const angle = region.longitudeDelta;
-  return Math.max(0, Math.min(20, Math.round(Math.log(360 / angle) / Math.LN2)));
-}
-
-function PropertyMarker({
+const PropertyMarker = React.memo(function PropertyMarker({
   property,
   coverPhoto,
   formatPrice,
@@ -48,9 +33,24 @@ function PropertyMarker({
   property: Property;
   coverPhoto: string | null;
   formatPrice: (p: Property) => string;
-  onPress: () => void;
+  onPress: (property: Property) => void;
 }) {
-  // Image loading is handled by CachedImage internally
+  const alreadyLoaded = !coverPhoto || loadedMarkerImages.has(coverPhoto);
+  const [imageLoaded, setImageLoaded] = useState(alreadyLoaded);
+
+  const handleImageLoad = useCallback(() => {
+    if (coverPhoto) loadedMarkerImages.add(coverPhoto);
+    setImageLoaded(true);
+  }, [coverPhoto]);
+
+  // Safety timeout: stop tracking after 3s even if image never loads
+  useEffect(() => {
+    if (imageLoaded) return;
+    const timeout = setTimeout(() => setImageLoaded(true), 3000);
+    return () => clearTimeout(timeout);
+  }, [imageLoaded]);
+
+  const isLocalOrHttp = coverPhoto && (coverPhoto.startsWith('file://') || coverPhoto.startsWith('http') || coverPhoto.startsWith('/'));
 
   return (
     <Marker
@@ -58,17 +58,18 @@ function PropertyMarker({
         latitude: property.latitude!,
         longitude: property.longitude!,
       }}
-      onPress={onPress}
-      tracksViewChanges={false}
+      onPress={() => onPress(property)}
+      tracksViewChanges={!imageLoaded}
     >
       <View style={styles.markerWrapper}>
         <View style={styles.markerCard}>
           {coverPhoto ? (
             <CachedImage
-              storagePath={coverPhoto.startsWith('http') ? undefined : coverPhoto}
-              bucket={coverPhoto.startsWith('http') ? undefined : 'property-photos'}
-              uri={coverPhoto.startsWith('http') ? coverPhoto : undefined}
+              storagePath={!isLocalOrHttp ? coverPhoto : undefined}
+              bucket={!isLocalOrHttp ? 'property-photos' : undefined}
+              uri={isLocalOrHttp ? coverPhoto : undefined}
               style={styles.markerImage}
+              onLoad={handleImageLoad}
             />
           ) : (
             <View style={styles.markerPlaceholder}>
@@ -84,35 +85,7 @@ function PropertyMarker({
       </View>
     </Marker>
   );
-}
-
-function ClusterMarker({
-  count,
-  coordinate,
-  onPress,
-}: {
-  count: number;
-  coordinate: { latitude: number; longitude: number };
-  onPress: () => void;
-}) {
-  const size = Math.min(40 + Math.log2(count) * 6, 56);
-
-  return (
-    <Marker
-      coordinate={coordinate}
-      onPress={onPress}
-      tracksViewChanges={false}
-    >
-      <View style={styles.clusterWrapper}>
-        <View style={[styles.clusterCircle, { width: size, height: size, borderRadius: size / 2 }]}>
-          <Text style={styles.clusterCount}>
-            {count > 99 ? '99+' : count}
-          </Text>
-        </View>
-      </View>
-    </Marker>
-  );
-}
+});
 
 export default forwardRef<MapViewHandle, MapViewComponentProps>(function MapViewComponent(
   {
@@ -129,7 +102,6 @@ export default forwardRef<MapViewHandle, MapViewComponentProps>(function MapView
 ) {
   const mapRef = useRef<MapView>(null);
   const initialRegion = getInitialRegion();
-  const [region, setRegion] = useState<Region>(initialRegion);
 
   useImperativeHandle(ref, () => ({
     animateToRegion: (region: Region, duration = 800) => {
@@ -137,93 +109,40 @@ export default forwardRef<MapViewHandle, MapViewComponentProps>(function MapView
     },
   }));
 
-  const clusterIndex = useMemo(() => {
-    const index = new Supercluster<PointProps>({
-      radius: 60,
-      maxZoom: 14,
-      minPoints: 2,
-    });
-
-    const points: Supercluster.PointFeature<PointProps>[] = filteredProperties
-      .filter(p => p.latitude && p.longitude)
-      .map(p => ({
-        type: 'Feature',
-        geometry: {
-          type: 'Point',
-          coordinates: [p.longitude!, p.latitude!],
-        },
-        properties: {
-          property: p,
-        },
-      }));
-
-    index.load(points);
-    return index;
-  }, [filteredProperties]);
-
-  const clusters = useMemo(() => {
-    const bbox = regionToBBox(region);
-    const zoom = getZoomLevel(region);
-    return clusterIndex.getClusters(bbox, zoom);
-  }, [region, clusterIndex]);
-
-  const handleRegionChange = useCallback((newRegion: Region) => {
-    setRegion(newRegion);
-  }, []);
-
-  const handleClusterPress = useCallback((clusterId: number, latitude: number, longitude: number) => {
-    const expansionZoom = clusterIndex.getClusterExpansionZoom(clusterId);
-    const delta = 360 / Math.pow(2, expansionZoom + 1);
-    mapRef.current?.animateToRegion(
-      { latitude, longitude, latitudeDelta: delta, longitudeDelta: delta },
-      500,
-    );
-  }, [clusterIndex]);
+  // Render every property with location as an individual marker — no clustering.
+  // Markers mount once and never re-render on zoom, pan, or rotation.
+  const markers = useMemo(
+    () => filteredProperties.filter(p => p.latitude && p.longitude),
+    [filteredProperties],
+  );
 
   return (
     <MapView
       ref={mapRef}
       style={styles.map}
-      provider={PROVIDER_GOOGLE}
+      provider={Platform.OS === 'android' ? PROVIDER_GOOGLE : undefined}
       initialRegion={initialRegion}
       showsUserLocation={true}
       showsMyLocationButton={false}
       showsCompass={false}
       mapType={mapType}
       customMapStyle={isDarkMode ? darkMapStyle : undefined}
-      onRegionChangeComplete={handleRegionChange}
     >
-      {clusters.map((feature) => {
-        const [longitude, latitude] = feature.geometry.coordinates;
-
-        if ('cluster' in feature.properties && feature.properties.cluster) {
-          return (
-            <ClusterMarker
-              key={`cluster-${feature.id}`}
-              count={feature.properties.point_count}
-              coordinate={{ latitude, longitude }}
-              onPress={() => handleClusterPress(feature.id as number, latitude, longitude)}
-            />
-          );
-        }
-
-        const { property } = feature.properties as PointProps;
-        return (
-          <PropertyMarker
-            key={property.id}
-            property={property}
-            coverPhoto={getCoverPhoto(property)}
-            formatPrice={formatPrice}
-            onPress={() => setSelectedProperty(property)}
-          />
-        );
-      })}
+      {markers.map((property) => (
+        <PropertyMarker
+          key={property.id}
+          property={property}
+          coverPhoto={getCoverPhoto(property)}
+          formatPrice={formatPrice}
+          onPress={setSelectedProperty}
+        />
+      ))}
     </MapView>
   );
 });
 
-const MARKER_W = 62;
-const MARKER_IMG_H = 50;
+const MARKER_W = 68;
+const MARKER_IMG_H = 80;
 
 const styles = StyleSheet.create({
   map: {
@@ -231,6 +150,7 @@ const styles = StyleSheet.create({
     height: '100%',
   },
   markerWrapper: {
+    padding: Platform.OS === 'android' ? 8 : 0,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 3 },
     shadowOpacity: 0.35,
@@ -265,25 +185,6 @@ const styles = StyleSheet.create({
   markerPriceText: {
     color: '#fff',
     fontSize: 9,
-    fontWeight: '700',
-  },
-  clusterWrapper: {
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.3,
-    shadowRadius: 4,
-    elevation: 6,
-  },
-  clusterCircle: {
-    backgroundColor: '#1a1a1a',
-    borderWidth: 2.5,
-    borderColor: '#fff',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  clusterCount: {
-    color: '#fff',
-    fontSize: 13,
     fontWeight: '700',
   },
 });

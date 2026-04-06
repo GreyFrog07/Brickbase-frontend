@@ -9,8 +9,7 @@ import {
   Alert,
   ActivityIndicator,
   Image,
-  KeyboardAvoidingView,
-  Platform,
+  Keyboard,
   Dimensions,
   Modal,
   FlatList,
@@ -53,6 +52,7 @@ import { useLocalSearchParams, router, useFocusEffect } from 'expo-router';
 import api from '../../lib/api';
 import { addToPendingQueue } from '../../lib/cache';
 import { cacheLocalImage } from '../../lib/imageCache';
+import { getUserFolder, uploadToStorage } from '../../lib/supabase';
 import { useProperties } from '../../contexts/PropertyContext';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
@@ -127,14 +127,31 @@ export default function AddPropertyScreen() {
   const scrollViewRef = useRef<ScrollView>(null);
   const scrollPositionRef = useRef(0);
 
+  // Input refs for return-key field navigation
+  const builderNameRefs = useRef<(TextInput | null)[]>([]);
+  const builderPhoneRefs = useRef<(TextInput | null)[]>([]);
+  const addressUnitNoRef = useRef<TextInput>(null);
+  const addressBlockRef = useRef<TextInput>(null);
+  const addressSectorRef = useRef<TextInput>(null);
+  const addressAreaRef = useRef<TextInput>(null);
+  const addressCityRef = useRef<TextInput>(null);
+  const bhkRef = useRef<TextInput>(null);
+  const priceRef = useRef<TextInput>(null);
+  const propertyAgeRef = useRef<TextInput>(null);
+  const paymentPlanRef = useRef<TextInput>(null);
+  const additionalNotesRef = useRef<TextInput>(null);
+
   // Preserve scroll position when app goes to background and comes back
   useEffect(() => {
     const subscription = AppState.addEventListener('change', (nextAppState) => {
       if (nextAppState === 'active') {
-        // Restore scroll position when app comes back
+        // Restore scroll position when app comes back (multiple attempts for reliability)
         setTimeout(() => {
           scrollViewRef.current?.scrollTo({ y: scrollPositionRef.current, animated: false });
-        }, 100);
+        }, 150);
+        setTimeout(() => {
+          scrollViewRef.current?.scrollTo({ y: scrollPositionRef.current, animated: false });
+        }, 500);
       }
     });
     return () => subscription.remove();
@@ -546,11 +563,15 @@ export default function AddPropertyScreen() {
       });
       if (result) {
         const sectorNum = (result.district || '').replace(/[^0-9]/g, '');
+        const cityValue = result.city || '';
+        const areaValue = result.subregion || result.street || '';
+        // Skip area if it's the same as city
+        const resolvedArea = areaValue.toLowerCase() === cityValue.toLowerCase() ? '' : areaValue;
         setAddress(prev => ({
           ...prev,
           sector: prev.sector || sectorNum,
-          area: prev.area || result.subregion || result.street || '',
-          city: prev.city || result.city || '',
+          area: prev.area || resolvedArea,
+          city: prev.city || cityValue,
         }));
       }
     } catch (error) {
@@ -824,145 +845,103 @@ export default function AddPropertyScreen() {
     setCoverPhotoIndex(index);
   };
 
-  // Upload photos to Supabase Storage via multipart FormData (no base64 overhead)
-  // In edit mode, existing photos are signed URLs (http) — skip re-uploading them.
-  const uploadPhotosToStorage = async (): Promise<string[]> => {
+  // Generate a unique filename for storage
+  const generateFilename = (ext: string) => {
+    const id = `${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+    return `${id}.${ext}`;
+  };
+
+  // Build the property folder name on the frontend (mirrors backend logic exactly)
+  const buildPropertyFolder = (propertyId: string) => {
+    const parts: string[] = [];
+    for (const val of [address.city, address.sector, address.block, address.unitNo]) {
+      if (val && val.trim()) {
+        parts.push(val.trim().replace(/ /g, '-').replace(/[^\w-]/g, '').slice(0, 50) || 'unknown');
+      }
+    }
+    const addr = parts.length > 0 ? parts.join('-') : 'no-address';
+    return `${propertyId}_${addr}`;
+  };
+
+  const generateUUID = () =>
+    'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+      const r = (Math.random() * 16) | 0;
+      return (c === 'x' ? r : (r & 0x3) | 0x8).toString(16);
+    });
+
+  // Upload photos directly to Supabase Storage (bypasses backend entirely)
+  // Uploads sequentially to avoid memory pressure from concurrent large files.
+  // Files go directly to the final property folder — no pending step.
+  const uploadPhotosToStorage = async (folder: string): Promise<string[]> => {
     if (photos.length === 0) return [];
+    const results: string[] = [];
 
-    // Separate new local files from existing server URLs
-    const newPhotos: { idx: number; photo: PhotoData }[] = [];
-    photos.forEach((photo, idx) => {
-      if (!photo.uri.startsWith('http')) {
-        newPhotos.push({ idx, photo });
+    for (const photo of photos) {
+      // Existing storage path (edit mode) — keep as-is
+      if (!photo.uri.startsWith('file://') && !photo.uri.startsWith('/')) {
+        results.push(photo.uri);
+        continue;
       }
-    });
 
-    // Upload only new photos
-    let newPaths: string[] = [];
-    if (newPhotos.length > 0) {
-      const formData = new FormData();
-      newPhotos.forEach(({ photo }, i) => {
-        formData.append('files', {
-          uri: photo.uri,
-          type: 'image/jpeg',
-          name: `photo_${i}.jpg`,
-        } as any);
-      });
-
-      const response = await api.post('/upload/batch/photos', formData, {
-        headers: { 'Content-Type': 'multipart/form-data' },
-      });
-      const { urls, failed } = response.data;
-      if (failed.length > 0) {
-        console.warn(`${failed.length} photos failed to upload to storage`);
+      try {
+        const storagePath = `${folder}/${generateFilename('jpg')}`;
+        await uploadToStorage('property-photos', storagePath, photo.uri, 'image/jpeg');
+        results.push(storagePath);
+      } catch (error) {
+        console.warn('Photo upload failed after retries:', error);
+        results.push('');
       }
-      newPaths = urls;
     }
 
-    // Rebuild list in original order: existing URLs as-is, new uploads by position
-    let newIdx = 0;
-    return photos
-      .map((photo) => {
-        if (photo.uri.startsWith('http')) return photo.uri;
-        return newPaths[newIdx++] || '';
-      })
-      .filter(url => url && url.length > 0);
+    return results.filter(p => p.length > 0);
   };
 
-  // Upload videos to Supabase Storage via multipart FormData (no base64 overhead)
-  // In edit mode, existing videos are signed URLs (http) — skip re-uploading them.
-  const uploadVideosToStorage = async (): Promise<string[]> => {
+  // Upload videos directly to Supabase Storage (sequential — videos are large)
+  const uploadVideosToStorage = async (folder: string): Promise<string[]> => {
     if (videos.length === 0) return [];
+    const results: string[] = [];
 
-    // Separate new local files from existing server URLs
-    const newVideos: { idx: number; video: VideoData }[] = [];
-    videos.forEach((video, idx) => {
-      if (!video.uri.startsWith('http')) {
-        newVideos.push({ idx, video });
+    for (const video of videos) {
+      if (!video.uri.startsWith('file://') && !video.uri.startsWith('/')) {
+        results.push(video.uri);
+        continue;
       }
-    });
 
-    // Upload only new videos
-    let newPaths: string[] = [];
-    if (newVideos.length > 0) {
-      const formData = new FormData();
-      newVideos.forEach(({ video }, i) => {
-        formData.append('files', {
-          uri: video.uri,
-          type: 'video/mp4',
-          name: `video_${i}.mp4`,
-        } as any);
-      });
-
-      const response = await api.post('/upload/batch/videos', formData, {
-        headers: { 'Content-Type': 'multipart/form-data' },
-      });
-      const { urls, failed } = response.data;
-      if (failed.length > 0) {
-        console.warn(`${failed.length} videos failed to upload to storage`);
+      try {
+        const storagePath = `${folder}/${generateFilename('mp4')}`;
+        await uploadToStorage('property-videos', storagePath, video.uri, 'video/mp4');
+        results.push(storagePath);
+      } catch (error) {
+        console.warn('Video upload failed after retries:', error);
+        results.push('');
       }
-      newPaths = urls;
     }
 
-    // Rebuild list in original order: existing URLs as-is, new uploads by position
-    let newIdx = 0;
-    return videos
-      .map((video) => {
-        if (video.uri.startsWith('http')) return video.uri;
-        return newPaths[newIdx++] || '';
-      })
-      .filter(url => url && url.length > 0);
+    return results.filter(p => p.length > 0);
   };
 
-  // Upload important files to Supabase Storage via multipart FormData
-  // In edit mode, existing files have url/path from server — skip re-uploading them.
-  const uploadFilesToStorage = async (): Promise<{ name: string; path: string; mimeType?: string }[]> => {
+  // Upload important files directly to Supabase Storage (sequential)
+  const uploadFilesToStorage = async (folder: string): Promise<{ name: string; path: string; mimeType?: string }[]> => {
     if (importantFiles.length === 0) return [];
+    const results: { name: string; path: string; mimeType?: string }[] = [];
 
-    // Separate existing server files from new local files
-    const existingFiles: { idx: number; file: ImportantFile }[] = [];
-    const newFiles: { idx: number; file: ImportantFile }[] = [];
-    importantFiles.forEach((file, idx) => {
+    for (const file of importantFiles) {
       if (file.url || file.path) {
-        existingFiles.push({ idx, file });
-      } else {
-        newFiles.push({ idx, file });
+        results.push({ name: file.name, path: file.path || file.url || '', mimeType: file.mimeType });
+        continue;
       }
-    });
 
-    // Upload only new files
-    let newPaths: string[] = [];
-    if (newFiles.length > 0) {
-      const formData = new FormData();
-      newFiles.forEach(({ file }, i) => {
-        formData.append('files', {
-          uri: file.uri,
-          type: file.mimeType || 'application/octet-stream',
-          name: file.name || `file_${i}`,
-        } as any);
-      });
-
-      const response = await api.post('/upload/batch/files', formData, {
-        headers: { 'Content-Type': 'multipart/form-data' },
-      });
-      const { urls: paths, failed } = response.data;
-      if (failed.length > 0) {
-        console.warn(`${failed.length} files failed to upload to storage`);
+      try {
+        const ext = file.name?.split('.').pop() || 'pdf';
+        const storagePath = `${folder}/${generateFilename(ext)}`;
+        await uploadToStorage('property-files', storagePath, file.uri, file.mimeType || 'application/octet-stream');
+        results.push({ name: file.name, path: storagePath, mimeType: file.mimeType });
+      } catch (error) {
+        console.warn('File upload failed after retries:', error);
       }
-      newPaths = paths;
     }
 
-    // Rebuild list in original order
-    let newIdx = 0;
-    return importantFiles
-      .map((file) => {
-        if (file.url || file.path) {
-          // Existing file — preserve its server path/url
-          return { name: file.name, path: file.path || file.url || '', mimeType: file.mimeType };
-        }
-        return { name: file.name, path: newPaths[newIdx++] || '', mimeType: file.mimeType };
-      })
-      .filter(f => f.path.length > 0);
+    return results.filter(f => f.path.length > 0);
   };
 
   // Builder management
@@ -1083,152 +1062,243 @@ export default function AddPropertyScreen() {
       return;
     }
 
-    // Show uploading state
-    setLoading(true);
-    
-    try {
-      // Upload photos, videos, and files to Supabase Storage first
-      const [photoUrls, videoUrls, uploadedFiles] = await Promise.all([
-        uploadPhotosToStorage(),
-        uploadVideosToStorage(),
-        uploadFilesToStorage(),
+    const photoWithLocation = photos.find(p => p.location);
+    const validBuilders = builders.filter(b => b.name || b.phoneNumber);
+    let actualPrice = price ? parseFloat(price.replace(',', '.')) : null;
+    const floorsData = needsMultipleFloors ? floors.map(f => ({
+      tower: f.tower || null,
+      floorNumber: f.floorNumber,
+      price: typeof f.price === 'string' ? parseFloat(String(f.price).replace(',', '.')) : f.price,
+      priceUnit: f.priceUnit,
+    })) : [];
+
+    const basePropertyData = {
+      propertyCategory,
+      propertyType,
+      coverPhotoIndex: coverPhotoIndex,
+      floor: needsMultipleFloors ? null : (floors[0]?.floorNumber || null),
+      floors: floorsData,
+      price: needsMultipleFloors ? null : actualPrice,
+      priceUnit: needsMultipleFloors ? null : priceUnit,
+      builders: validBuilders,
+      builderName: validBuilders[0]?.name || null,
+      builderPhone: validBuilders[0]?.phoneNumber || null,
+      address: address,
+      sizes: sizes,
+      possessionMonth: possessionMonth,
+      possessionYear: possessionYear,
+      paymentPlan: paymentPlan || null,
+      additionalNotes: additionalNotes || null,
+      clubProperty,
+      poolProperty,
+      parkProperty,
+      gatedProperty,
+      cornerProperty,
+      propertyAge: propertyAge ? parseInt(propertyAge) : null,
+      ageType: ageType || null,
+      case: caseType || null,
+      bhk: bhk ? parseInt(bhk) : null,
+      latitude: photoWithLocation?.location?.coords.latitude || null,
+      longitude: photoWithLocation?.location?.coords.longitude || null,
+    };
+
+    if (isEditMode && editPropertyId) {
+      // Optimistic: update local state immediately with current URIs
+      const localPhotoUris = photos.map(p => p.uri);
+      const localVideoUris = videos.map(v => v.uri);
+
+      const optimisticProperty = {
+        ...basePropertyData,
+        id: editPropertyId,
+        propertyPhotos: localPhotoUris,
+        propertyVideos: localVideoUris,
+        importantFiles: importantFiles.map(f => ({
+          name: f.name, uri: f.uri, url: f.url, path: f.path, mimeType: f.mimeType,
+        })),
+        coverPhotoPath: '',
+        updatedAt: new Date().toISOString(),
+      } as any;
+
+      updatePropertyInState(editPropertyId, optimisticProperty);
+
+      Alert.alert('Success', 'Property updated!', [
+        { text: 'OK', onPress: () => router.back() },
       ]);
-      
-      // Pre-cache uploaded photos locally so they never need to be re-downloaded
-      photoUrls.forEach((storagePath, i) => {
-        if (storagePath && photos[i] && !photos[i].uri.startsWith('http')) {
-          cacheLocalImage(storagePath, photos[i].uri).catch(() => {});
-        }
-      });
 
-      setLoading(false);
+      // Capture local photos for background caching after upload
+      const localPhotos = photos.map(p => ({ uri: p.uri, isNew: !p.uri.startsWith('http') }));
 
-      // OPTIMISTIC UI: Show success immediately, sync in background
-      const photoWithLocation = photos.find(p => p.location);
-      const validBuilders = builders.filter(b => b.name || b.phoneNumber);
-      
-      // Parse price - handle decimals properly
-      let actualPrice = price ? parseFloat(price.replace(',', '.')) : null;
-      
-      // Prepare floors data for multi-floor properties
-      const floorsData = needsMultipleFloors ? floors.map(f => ({
-        tower: f.tower || null,
-        floorNumber: f.floorNumber,
-        price: typeof f.price === 'string' ? parseFloat(String(f.price).replace(',', '.')) : f.price,
-        priceUnit: f.priceUnit,
-      })) : [];
-      
-      const propertyData = {
-        propertyCategory,
-        propertyType,
-        propertyPhotos: photoUrls,
-        propertyVideos: videoUrls,
-        coverPhotoIndex: coverPhotoIndex,
-        floor: needsMultipleFloors ? null : (floors[0]?.floorNumber || null),
-        floors: floorsData,
-        price: needsMultipleFloors ? null : actualPrice,
-        priceUnit: needsMultipleFloors ? null : priceUnit,
-        builders: validBuilders,
-        builderName: validBuilders[0]?.name || null,
-        builderPhone: validBuilders[0]?.phoneNumber || null,
-        address: address,
-        sizes: sizes,
-        possessionMonth: possessionMonth,
-        possessionYear: possessionYear,
-        importantFiles: uploadedFiles,
-        paymentPlan: paymentPlan || null,
-        additionalNotes: additionalNotes || null,
-        clubProperty,
-        poolProperty,
-        parkProperty,
-        gatedProperty,
-        cornerProperty,
-        propertyAge: propertyAge ? parseInt(propertyAge) : null,
-        ageType: ageType || null,
-        case: caseType || null,
-        bhk: bhk ? parseInt(bhk) : null,
-        latitude: photoWithLocation?.location?.coords.latitude || null,
-        longitude: photoWithLocation?.location?.coords.longitude || null,
-      };
+      // Build target folder: userFolder/propertyFolder
+      const userFolder = await getUserFolder();
+      const propFolder = buildPropertyFolder(editPropertyId);
 
-      if (isEditMode && editPropertyId) {
-        // OPTIMISTIC: Update local state immediately
-        updatePropertyInState(editPropertyId, {
-          ...propertyData,
-          id: editPropertyId,
-          createdAt: undefined,
-          updatedAt: new Date().toISOString(),
-        } as any);
+      // Upload media + sync entirely in background
+      uploadAndSyncUpdateInBackground(editPropertyId, basePropertyData, localPhotos, `${userFolder}/${propFolder}`);
+    } else {
+      // NEW PROPERTY — generate UUID now so we can upload directly to the final folder
+      const propertyId = generateUUID();
+      const tempId = `temp_${Date.now()}`;
+      const localPhotoUris = photos.map(p => p.uri);
+      const localVideoUris = videos.map(v => v.uri);
 
-        Alert.alert('Success', 'Property updated! Syncing...', [
-          { text: 'OK', onPress: () => router.back() },
-        ]);
+      const tempProperty = {
+        ...basePropertyData,
+        id: tempId,
+        propertyPhotos: localPhotoUris,
+        propertyVideos: localVideoUris,
+        importantFiles: importantFiles.map(f => ({ name: f.name, uri: f.uri, mimeType: f.mimeType })),
+        // coverPhotoPath left empty so CachedImage falls through to uri mode (local file)
+        coverPhotoPath: '',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      } as any;
 
-        // Sync in background
-        syncPropertyUpdateInBackground(editPropertyId, propertyData);
-      } else {
-        // OPTIMISTIC: Add to local state with temp ID
-        const tempId = `temp_${Date.now()}`;
-        const tempProperty = {
-          ...propertyData,
-          id: tempId,
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString(),
-          coverPhotoPath: photoUrls[coverPhotoIndex] || '',
-        } as any;
+      addPropertyToState(tempProperty);
 
-        addPropertyToState(tempProperty);
+      Alert.alert('Success', 'Property added!', [
+        { text: 'OK', onPress: async () => {
+          await clearFormDraft();
+          resetForm();
+        }},
+      ]);
 
-        Alert.alert('Success', ' Property added! ', [
-          { text: 'OK', onPress: async () => {
-            await clearFormDraft();
-            resetForm();
-          }},
-        ]);
+      // Capture local photos for background caching after upload
+      const localPhotos = photos.map(p => ({ uri: p.uri, isNew: !p.uri.startsWith('http') }));
 
-        // Add to pending queue and sync in background
-        syncPropertyInBackground(propertyData, tempId);
-      }
-    } catch (error: any) {
-      setLoading(false);
-      console.error('Error uploading media:', error?.response?.data || error?.message || error);
-      const detail = error?.response?.data?.detail || error?.message || 'Unknown error';
-      Alert.alert('Upload Error', `Failed to upload media: ${detail}`);
+      // Build target folder: userFolder/propertyFolder
+      const userFolder = await getUserFolder();
+      const propFolder = buildPropertyFolder(propertyId);
+
+      // Upload media + sync entirely in background — pass the pre-generated property ID
+      uploadAndSyncInBackground(tempId, propertyId, basePropertyData, localPhotos, `${userFolder}/${propFolder}`);
     }
   };
 
-  // Background sync function for new properties
-  const syncPropertyInBackground = async (propertyData: any, tempId: string) => {
+  // Full background pipeline: upload media → create on server → replace temp property
+  const uploadAndSyncInBackground = async (
+    tempId: string,
+    propertyId: string,
+    baseData: any,
+    localPhotos: { uri: string; isNew: boolean }[],
+    targetFolder: string,
+  ) => {
+    let photoUrls: string[] = [];
+    let videoUrls: string[] = [];
+    let uploadedFiles: { name: string; path: string; mimeType?: string }[] = [];
+
     try {
-      const response = await api.post('/properties', propertyData);
-      const realProperty = response.data;
-      // Replace temp property with real one from server
-      replacePropertyInState(tempId, realProperty);
-      console.log('Property synced successfully');
+      // 1. Upload all media directly to the final property folder in Supabase Storage
+      [photoUrls, videoUrls, uploadedFiles] = await Promise.all([
+        uploadPhotosToStorage(targetFolder),
+        uploadVideosToStorage(targetFolder),
+        uploadFilesToStorage(targetFolder),
+      ]);
+
+      // 2. Pre-cache uploaded photos so they never need to be re-downloaded
+      photoUrls.forEach((storagePath, i) => {
+        if (storagePath && localPhotos[i] && localPhotos[i].isNew) {
+          cacheLocalImage(storagePath, localPhotos[i].uri).catch(() => {});
+        }
+      });
+
+      // 3. Create property on server with pre-generated ID (retry once on network error)
+      const propertyData = {
+        ...baseData,
+        id: propertyId,
+        propertyPhotos: photoUrls,
+        propertyVideos: videoUrls,
+        importantFiles: uploadedFiles,
+      };
+
+      let response;
+      try {
+        response = await api.post('/properties', propertyData);
+      } catch (err: any) {
+        if (err.message?.includes('Network Error') || err.code === 'ERR_NETWORK') {
+          await new Promise(r => setTimeout(r, 1500));
+          response = await api.post('/properties', propertyData);
+        } else {
+          throw err;
+        }
+      }
+
+      replacePropertyInState(tempId, response.data);
+      console.log('Property uploaded and synced successfully');
     } catch (error: any) {
-      console.error('Background sync failed:', error);
-      // Add to pending queue for retry on next app open
+      console.error('Background upload+sync failed:', error);
       if (user) {
-        await addToPendingQueue(user.id, { ...propertyData, _tempId: tempId });
+        await addToPendingQueue(user.id, {
+          ...baseData,
+          id: propertyId,
+          propertyPhotos: photoUrls,
+          propertyVideos: videoUrls,
+          importantFiles: uploadedFiles,
+          _tempId: tempId,
+        });
       }
       Alert.alert(
         'Sync Issue',
-        'Property was saved locally but failed to sync. It will retry automatically.',
+        'Property saved locally. Will sync when connection is available.',
         [{ text: 'OK' }]
       );
     }
   };
 
   // Background sync function for property updates
-  const syncPropertyUpdateInBackground = async (propertyId: string, propertyData: any) => {
+  const uploadAndSyncUpdateInBackground = async (
+    propertyId: string,
+    baseData: any,
+    localPhotos: { uri: string; isNew: boolean }[],
+    targetFolder: string,
+  ) => {
+    let photoUrls: string[] = [];
+    let videoUrls: string[] = [];
+    let uploadedFiles: { name: string; path: string; mimeType?: string }[] = [];
+
     try {
-      await api.put(`/properties/${propertyId}`, propertyData);
+      // 1. Upload all media directly to the property folder
+      [photoUrls, videoUrls, uploadedFiles] = await Promise.all([
+        uploadPhotosToStorage(targetFolder),
+        uploadVideosToStorage(targetFolder),
+        uploadFilesToStorage(targetFolder),
+      ]);
+
+      // 2. Pre-cache newly uploaded photos
+      photoUrls.forEach((storagePath, i) => {
+        if (storagePath && localPhotos[i] && localPhotos[i].isNew) {
+          cacheLocalImage(storagePath, localPhotos[i].uri).catch(() => {});
+        }
+      });
+
+      // 3. Update property on server (retry once on network error)
+      const propertyData = {
+        ...baseData,
+        propertyPhotos: photoUrls,
+        propertyVideos: videoUrls,
+        importantFiles: uploadedFiles,
+      };
+
+      let response;
+      try {
+        response = await api.put(`/properties/${propertyId}`, propertyData);
+      } catch (err: any) {
+        if (err.message?.includes('Network Error') || err.code === 'ERR_NETWORK') {
+          await new Promise(r => setTimeout(r, 1500));
+          response = await api.put(`/properties/${propertyId}`, propertyData);
+        } else {
+          throw err;
+        }
+      }
+      if (response.data) {
+        updatePropertyInState(propertyId, response.data);
+      }
       console.log('Property update synced successfully');
     } catch (error: any) {
       console.error('Background update sync failed:', error);
+      // Don't overwrite local state — the optimistic version with local images stays visible
       Alert.alert(
         'Sync Issue',
-        'Property update was initiated but failed to sync. Please try again.',
+        'Property updated locally but failed to sync. Will retry on next refresh.',
         [{ text: 'OK' }]
       );
     }
@@ -1268,12 +1338,7 @@ export default function AddPropertyScreen() {
 
   return (
     <SafeAreaView style={styles.container} edges={['bottom']}>
-      <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-        style={styles.keyboardView}
-        keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 20}
-      >
-        <ScrollView 
+        <ScrollView
           ref={scrollViewRef}
           style={styles.scrollView}
           contentContainerStyle={[
@@ -1284,6 +1349,7 @@ export default function AddPropertyScreen() {
           showsVerticalScrollIndicator={true}
           onScroll={(e) => { scrollPositionRef.current = e.nativeEvent.contentOffset.y; }}
           scrollEventThrottle={16}
+          automaticallyAdjustKeyboardInsets={true}
         >
           <View style={styles.formContainer}>
             {/* Header with Refresh button */}
@@ -1509,19 +1575,22 @@ export default function AddPropertyScreen() {
                 <View key={index} style={styles.builderContainer}>
                   <View style={styles.builderRow}>
                     <TextInput
+                      ref={(el) => { builderNameRefs.current[index] = el; }}
                       style={[styles.input, styles.builderNameInput]}
-                      placeholder="Builder name"
+                      placeholder="Name"
                       placeholderTextColor="#666"
                       value={builder.name}
                       onChangeText={(text) => updateBuilder(index, 'name', text)}
                       returnKeyType="next"
                       blurOnSubmit={false}
+                      onSubmitEditing={() => builderPhoneRefs.current[index]?.focus()}
                     />
                     <View style={styles.phoneContainer}>
                       <View style={styles.countryCodeFixed}>
                         <Text style={styles.countryCodeText}>+91</Text>
                       </View>
                       <TextInput
+                        ref={(el) => { builderPhoneRefs.current[index] = el; }}
                         style={[styles.input, styles.builderPhoneInput]}
                         placeholder="Phone (10 digits)"
                         placeholderTextColor="#666"
@@ -1534,6 +1603,13 @@ export default function AddPropertyScreen() {
                         maxLength={10}
                         returnKeyType="next"
                         blurOnSubmit={false}
+                        onSubmitEditing={() => {
+                          if (index < builders.length - 1) {
+                            builderNameRefs.current[index + 1]?.focus();
+                          } else {
+                            addressUnitNoRef.current?.focus();
+                          }
+                        }}
                       />
                     </View>
                   </View>
@@ -1645,10 +1721,98 @@ export default function AddPropertyScreen() {
               </View>
             </View>
 
-            {/* 6. Property Features */}
+            
+
+            {/* 6. Address */}
+            <View style={styles.section}>
+              <Text style={styles.label}>Address</Text>
+              <View style={styles.addressRow}>
+                <TextInput
+                  ref={addressUnitNoRef}
+                  style={[styles.input, { flex: 1 }]}
+                  placeholder={showTowerField ? "Society Name" : "Unit No"}
+                  placeholderTextColor="#666"
+                  value={address.unitNo}
+                  onChangeText={(text) => setAddress({ ...address, unitNo: text })}
+                  returnKeyType="next"
+                  blurOnSubmit={false}
+                  onSubmitEditing={() => addressBlockRef.current?.focus()}
+                />
+                <TextInput
+                  ref={addressBlockRef}
+                  style={[styles.input, { flex: 0.7 }]}
+                  placeholder="Block"
+                  placeholderTextColor="#666"
+                  value={address.block}
+                  onChangeText={(text) => setAddress({ ...address, block: text })}
+                  returnKeyType="next"
+                  blurOnSubmit={false}
+                  onSubmitEditing={() => addressSectorRef.current?.focus()}
+                />
+                <View style={{ flex: 1 }}>
+                  {/* <Text style={styles.addressFieldLabel}>Sector</Text> */}
+                  <TextInput
+                    ref={addressSectorRef}
+                    style={styles.input}
+                    placeholder="Sector"
+                    placeholderTextColor="#666"
+                    keyboardType="number-pad"
+                    value={address.sector}
+                    onChangeText={(text) => setAddress({ ...address, sector: text.replace(/[^0-9]/g, '') })}
+                    returnKeyType="next"
+                    blurOnSubmit={false}
+                    onSubmitEditing={() => addressAreaRef.current?.focus()}
+                  />
+                </View>
+              </View>
+              <View style={styles.addressRow}>
+                <TextInput
+                  ref={addressAreaRef}
+                  style={[styles.input, styles.addressInputSmall]}
+                  placeholder="Area"
+                  placeholderTextColor="#666"
+                  value={address.area}
+                  onChangeText={(text) => setAddress({ ...address, area: text })}
+                  returnKeyType="next"
+                  blurOnSubmit={false}
+                  onSubmitEditing={() => addressCityRef.current?.focus()}
+                />
+                <TextInput
+                  ref={addressCityRef}
+                  style={[styles.input, styles.addressInputSmall]}
+                  placeholder="City"
+                  placeholderTextColor="#666"
+                  value={address.city}
+                  onChangeText={(text) => setAddress({ ...address, city: text })}
+                  returnKeyType="next"
+                  blurOnSubmit={false}
+                  onSubmitEditing={() => {
+                    if (showBhkField) bhkRef.current?.focus();
+                    else if (!needsMultipleFloors) priceRef.current?.focus();
+                    else Keyboard.dismiss();
+                  }}
+                />
+              </View>
+            </View>
+
+            {/* 7. Property Features */}
             <View style={styles.section}>
               <Text style={styles.label}>Property Features</Text>
               <View style={styles.featureContainer}>
+
+                <TouchableOpacity
+                  style={styles.featureItem}
+                  onPress={() => setCornerProperty(!cornerProperty)}
+                >
+                  <Ionicons
+                    name={cornerProperty ? 'checkbox' : 'square-outline'}
+                    size={24}
+                    color="#fff"
+                  />
+                  <Text style={styles.featureText}>Corner</Text>
+                </TouchableOpacity>
+
+                
                 <TouchableOpacity
                   style={styles.featureItem}
                   onPress={() => setClubProperty(!clubProperty)}
@@ -1697,62 +1861,7 @@ export default function AddPropertyScreen() {
                   <Text style={styles.featureText}>Gated</Text>
                 </TouchableOpacity>
 
-                <TouchableOpacity
-                  style={styles.featureItem}
-                  onPress={() => setCornerProperty(!cornerProperty)}
-                >
-                  <Ionicons
-                    name={cornerProperty ? 'checkbox' : 'square-outline'}
-                    size={24}
-                    color="#fff"
-                  />
-                  <Text style={styles.featureText}>Corner</Text>
-                </TouchableOpacity>
-              </View>
-            </View>
-
-            {/* 7. Address */}
-            <View style={styles.section}>
-              <Text style={styles.label}>Address</Text>
-              <View style={styles.addressRow}>
-                <TextInput
-                  style={[styles.input, { flex: 1 }]}
-                  placeholder={showTowerField ? "Society Name" : "Unit No"}
-                  placeholderTextColor="#666"
-                  value={address.unitNo}
-                  onChangeText={(text) => setAddress({ ...address, unitNo: text })}
-                />
-                <TextInput
-                  style={[styles.input, { flex: 0.7 }]}
-                  placeholder="Block"
-                  placeholderTextColor="#666"
-                  value={address.block}
-                  onChangeText={(text) => setAddress({ ...address, block: text })}
-                />
-                <TextInput
-                  style={[styles.input, { flex: 1 }]}
-                  placeholder="Sector"
-                  placeholderTextColor="#666"
-                  keyboardType="number-pad"
-                  value={address.sector}
-                  onChangeText={(text) => setAddress({ ...address, sector: text.replace(/[^0-9]/g, '') })}
-                />
-              </View>
-              <View style={styles.addressRow}>
-                <TextInput
-                  style={[styles.input, styles.addressInputSmall]}
-                  placeholder="Area"
-                  placeholderTextColor="#666"
-                  value={address.area}
-                  onChangeText={(text) => setAddress({ ...address, area: text })}
-                />
-                <TextInput
-                  style={[styles.input, styles.addressInputSmall]}
-                  placeholder="City"
-                  placeholderTextColor="#666"
-                  value={address.city}
-                  onChangeText={(text) => setAddress({ ...address, city: text })}
-                />
+                
               </View>
             </View>
 
@@ -1787,7 +1896,8 @@ export default function AddPropertyScreen() {
               <View style={styles.section}>
                 <Text style={styles.label}>BHK</Text>
                 <TextInput
-                  style={styles.input}
+                  ref={bhkRef}
+                  style={[styles.input, { width: 100 }]}
                   placeholder="e.g. 3"
                   placeholderTextColor="#666"
                   value={bhk}
@@ -1796,6 +1906,10 @@ export default function AddPropertyScreen() {
                   maxLength={2}
                   returnKeyType="next"
                   blurOnSubmit={false}
+                  onSubmitEditing={() => {
+                    if (!needsMultipleFloors) priceRef.current?.focus();
+                    else Keyboard.dismiss();
+                  }}
                 />
               </View>
             )}
@@ -1870,7 +1984,8 @@ export default function AddPropertyScreen() {
               <View style={styles.section}>
                 <Text style={styles.label}>Price ({getPriceUnitLabel(priceUnit)})</Text>
                 <TextInput
-                  style={styles.input}
+                  ref={priceRef}
+                  style={[styles.input, { width: 160 }]}
                   placeholder="0.00"
                   placeholderTextColor="#666"
                   value={price}
@@ -1886,6 +2001,12 @@ export default function AddPropertyScreen() {
                     }
                   }}
                   keyboardType="decimal-pad"
+                  returnKeyType="next"
+                  blurOnSubmit={false}
+                  onSubmitEditing={() => {
+                    if (ageType === 'Resale') propertyAgeRef.current?.focus();
+                    else paymentPlanRef.current?.focus();
+                  }}
                 />
               </View>
             )}
@@ -1920,12 +2041,16 @@ export default function AddPropertyScreen() {
                 <View style={styles.subSection}>
                   <Text style={styles.subLabel}>Property Age (years)</Text>
                   <TextInput
-                    style={styles.input}
-                    placeholder="Enter property age"
+                    ref={propertyAgeRef}
+                    style={[styles.input, { width: 120 }]}
+                    placeholder="e.g. 5"
                     placeholderTextColor="#666"
                     value={propertyAge}
                     onChangeText={setPropertyAge}
                     keyboardType="numeric"
+                    returnKeyType="next"
+                    blurOnSubmit={false}
+                    onSubmitEditing={() => paymentPlanRef.current?.focus()}
                   />
                 </View>
               )}
@@ -2024,6 +2149,7 @@ export default function AddPropertyScreen() {
             <View style={styles.section}>
               <Text style={styles.label}>Payment Plan</Text>
               <TextInput
+                ref={paymentPlanRef}
                 style={[styles.input, styles.multilineInput]}
                 placeholder="Enter payment plan details..."
                 placeholderTextColor="#666"
@@ -2072,6 +2198,7 @@ export default function AddPropertyScreen() {
             <View style={styles.section}>
               <Text style={styles.label}>Additional Features / Notes</Text>
               <TextInput
+                ref={additionalNotesRef}
                 style={[styles.input, styles.multilineInput]}
                 placeholder="Enter any additional features or notes..."
                 placeholderTextColor="#666"
@@ -2098,7 +2225,6 @@ export default function AddPropertyScreen() {
             </TouchableOpacity>
           </View>
         </ScrollView>
-      </KeyboardAvoidingView>
 
       {/* Media Gallery Modal - with swipe down to close */}
       <Modal
@@ -2619,7 +2745,7 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   floorPriceInput: {
-    width: '100%',
+    width: '50%',
   },
   removeFloorButton: {
     padding: 4,
@@ -2661,6 +2787,7 @@ const styles = StyleSheet.create({
     borderColor: '#333',
     borderRadius: 12,
     overflow: 'hidden',
+    width: 250,
   },
   sizeInputCombined: {
     flex: 1,
@@ -2773,6 +2900,11 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   // Address styles
+  addressFieldLabel: {
+    color: '#999',
+    fontSize: 11,
+    marginBottom: 4,
+  },
   addressRow: {
     flexDirection: 'row',
     gap: 12,
