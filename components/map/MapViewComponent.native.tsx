@@ -76,11 +76,11 @@ const PropertyMarker = React.memo(function PropertyMarker({
               <Ionicons name="home" size={20} color="#666" />
             </View>
           )}
-          <View style={styles.markerPriceBar}>
+          {/* <View style={styles.markerPriceBar}>
             <Text style={styles.markerPriceText} numberOfLines={1}>
               {formatPrice(property)}
             </Text>
-          </View>
+          </View> */}
         </View>
       </View>
     </Marker>

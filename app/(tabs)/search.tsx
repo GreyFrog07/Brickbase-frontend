@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useCallback } from 'react';
+import React, { useState, useCallback } from 'react';
 import {
   View,
   Text,
@@ -12,20 +12,14 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../../contexts/AuthContext';
 import { useProperties } from '../../contexts/PropertyContext';
-import {
-  Property,
-  PropertyCategory,
-  PropertyType,
-  CaseType,
-  RESIDENTIAL_PROPERTY_TYPES,
-  COMMERCIAL_PROPERTY_TYPES,
-  CASE_TYPES,
-} from '../../types/property';
+import { Property } from '../../types/property';
 import { router } from 'expo-router';
 import GridPropertyCard from '../../components/search/GridPropertyCard';
 import CompactPropertyCard from '../../components/search/CompactPropertyCard';
 import { GridSkeletonCard, CompactSkeletonCard } from '../../components/search/SkeletonCard';
 import WhatsAppShareModal from '../../components/property/WhatsAppShareModal';
+import { usePropertyFilters } from '../../hooks/usePropertyFilters';
+import PropertyFilters from '../../components/filters/PropertyFilters';
 
 export default function SearchScreen() {
   const { user } = useAuth();
@@ -35,85 +29,21 @@ export default function SearchScreen() {
   const [showFilters, setShowFilters] = useState(false);
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
 
-  // Filters
-  const [searchQuery, setSearchQuery] = useState('');
-  const [propertyCategory, setPropertyCategory] = useState<PropertyCategory | ''>('');
-  const [selectedType, setSelectedType] = useState<PropertyType | ''>('');
-  const [caseType, setCaseType] = useState<CaseType | ''>('');
-  const [minPrice, setMinPrice] = useState('');
-  const [maxPrice, setMaxPrice] = useState('');
-
-  // Compute filtered list synchronously — no extra render cycle
-  const filteredProperties = useMemo(() => {
-    let filtered = properties;
-
-    if (propertyCategory) {
-      filtered = filtered.filter(p => p.propertyCategory === propertyCategory);
-    }
-    if (selectedType) {
-      filtered = filtered.filter(p => p.propertyType === selectedType);
-    }
-    if (caseType) {
-      filtered = filtered.filter(p => p.case === caseType);
-    }
-    if (minPrice) {
-      const min = parseFloat(minPrice);
-      filtered = filtered.filter(p => {
-        if (p.floors && p.floors.length > 0) {
-          return p.floors.some(f => f.price >= min);
-        }
-        return p.price && p.price >= min;
-      });
-    }
-    if (maxPrice) {
-      const max = parseFloat(maxPrice);
-      filtered = filtered.filter(p => {
-        if (p.floors && p.floors.length > 0) {
-          return p.floors.some(f => f.price <= max);
-        }
-        return p.price && p.price <= max;
-      });
-    }
-    if (searchQuery) {
-      const query = searchQuery.toLowerCase();
-      filtered = filtered.filter(p =>
-        p.propertyType?.toLowerCase().includes(query) ||
-        p.propertyCategory?.toLowerCase().includes(query) ||
-        p.price?.toString().includes(query) ||
-        p.address?.city?.toLowerCase().includes(query) ||
-        p.address?.sector?.toLowerCase().includes(query) ||
-        p.builderName?.toLowerCase().includes(query)
-      );
-    }
-
-    return filtered;
-  }, [properties, searchQuery, propertyCategory, selectedType, caseType, minPrice, maxPrice]);
-
-  const clearFilters = () => {
-    setSearchQuery('');
-    setPropertyCategory('');
-    setSelectedType('');
-    setCaseType('');
-    setMinPrice('');
-    setMaxPrice('');
-  };
-
-  const hasActiveFilters = !!(searchQuery || propertyCategory || selectedType || caseType || minPrice || maxPrice);
+  const {
+    filters,
+    setFilter,
+    clearFilters,
+    filteredProperties,
+    hasActiveFilters,
+    addressOptions,
+    getPropertyTypes,
+  } = usePropertyFilters(properties);
 
   const handlePropertyPress = (property: Property) => {
     router.push({
       pathname: '/property-details',
       params: { propertyId: property.id },
     });
-  };
-
-  const getPropertyTypes = (): PropertyType[] => {
-    if (propertyCategory === 'Residential') {
-      return RESIDENTIAL_PROPERTY_TYPES;
-    } else if (propertyCategory === 'Commercial') {
-      return COMMERCIAL_PROPERTY_TYPES;
-    }
-    return [...RESIDENTIAL_PROPERTY_TYPES, ...COMMERCIAL_PROPERTY_TYPES];
   };
 
   const skeletonFooter = useCallback(() => {
@@ -178,8 +108,8 @@ export default function SearchScreen() {
             style={styles.searchInput}
             placeholder="Search properties..."
             placeholderTextColor="#666"
-            value={searchQuery}
-            onChangeText={setSearchQuery}
+            value={filters.searchQuery}
+            onChangeText={v => setFilter('searchQuery', v)}
             onFocus={() => setShowFilters(true)}
           />
           <TouchableOpacity onPress={() => setShowFilters(!showFilters)}>
@@ -201,97 +131,15 @@ export default function SearchScreen() {
 
       {/* Expanded Filters */}
       {showFilters && (
-        <View style={styles.filtersContainer}>
-          <View style={styles.filterSection}>
-            <Text style={styles.filterLabel}>Property Category</Text>
-            <FlatList
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              data={['', 'Residential', 'Commercial'] as (PropertyCategory | '')[]}
-              keyExtractor={(item) => item || 'all'}
-              renderItem={({ item: cat }) => (
-                <TouchableOpacity
-                  style={[styles.chip, (cat === '' ? !propertyCategory : propertyCategory === cat) && styles.chipSelected]}
-                  onPress={() => { setPropertyCategory(cat as PropertyCategory | ''); setSelectedType(''); }}
-                >
-                  <Text style={[styles.chipText, (cat === '' ? !propertyCategory : propertyCategory === cat) && styles.chipTextSelected]}>
-                    {cat || 'All'}
-                  </Text>
-                </TouchableOpacity>
-              )}
-              contentContainerStyle={styles.chipContainer}
-            />
-          </View>
-
-          <View style={styles.filterSection}>
-            <Text style={styles.filterLabel}>Property Type</Text>
-            <FlatList
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              data={['', ...getPropertyTypes()] as (PropertyType | '')[]}
-              keyExtractor={(item) => item || 'all'}
-              renderItem={({ item: type }) => (
-                <TouchableOpacity
-                  style={[styles.chip, (type === '' ? !selectedType : selectedType === type) && styles.chipSelected]}
-                  onPress={() => setSelectedType(type as PropertyType | '')}
-                >
-                  <Text style={[styles.chipText, (type === '' ? !selectedType : selectedType === type) && styles.chipTextSelected]}>
-                    {type || 'All'}
-                  </Text>
-                </TouchableOpacity>
-              )}
-              contentContainerStyle={styles.chipContainer}
-            />
-          </View>
-
-          <View style={styles.filterSection}>
-            <Text style={styles.filterLabel}>Case Type</Text>
-            <FlatList
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              data={['', ...CASE_TYPES] as (CaseType | '')[]}
-              keyExtractor={(item) => item || 'all'}
-              renderItem={({ item: type }) => (
-                <TouchableOpacity
-                  style={[styles.chip, (type === '' ? !caseType : caseType === type) && styles.chipSelected]}
-                  onPress={() => setCaseType(type as CaseType | '')}
-                >
-                  <Text style={[styles.chipText, (type === '' ? !caseType : caseType === type) && styles.chipTextSelected]}>
-                    {(type || 'All').replace(/_/g, ' ')}
-                  </Text>
-                </TouchableOpacity>
-              )}
-              contentContainerStyle={styles.chipContainer}
-            />
-          </View>
-
-          <View style={styles.filterSection}>
-            <Text style={styles.filterLabel}>Price Range (Cr)</Text>
-            <View style={styles.priceContainer}>
-              <View style={styles.priceInput}>
-                <TextInput
-                  style={styles.input}
-                  placeholder="Min"
-                  placeholderTextColor="#666"
-                  value={minPrice}
-                  onChangeText={setMinPrice}
-                  keyboardType="decimal-pad"
-                />
-              </View>
-              <Text style={styles.priceSeparator}>-</Text>
-              <View style={styles.priceInput}>
-                <TextInput
-                  style={styles.input}
-                  placeholder="Max"
-                  placeholderTextColor="#666"
-                  value={maxPrice}
-                  onChangeText={setMaxPrice}
-                  keyboardType="decimal-pad"
-                />
-              </View>
-            </View>
-          </View>
-        </View>
+        <PropertyFilters
+          filters={filters}
+          setFilter={setFilter}
+          clearFilters={clearFilters}
+          hasActiveFilters={hasActiveFilters}
+          addressOptions={addressOptions}
+          getPropertyTypes={getPropertyTypes}
+          variant="inline"
+        />
       )}
 
       {/* Results Count + View Toggle */}
@@ -378,12 +226,6 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#0c0c0c',
   },
-  loadingContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: '#0c0c0c',
-  },
   scrollContent: {
     paddingBottom: 16,
   },
@@ -416,77 +258,6 @@ const styles = StyleSheet.create({
   },
   clearButtonText: {
     color: '#ff4444',
-    fontSize: 14,
-  },
-  filtersContainer: {
-    backgroundColor: '#0c0c0c',
-    padding: 16,
-    paddingTop: 8,
-    borderBottomWidth: 1,
-    borderBottomColor: '#333',
-  },
-  filterSection: {
-    marginBottom: 16,
-  },
-  filterLabel: {
-    color: '#999',
-    fontSize: 12,
-    marginBottom: 8,
-    fontWeight: '600',
-  },
-  chipContainer: {
-    flexDirection: 'row',
-    gap: 8,
-  },
-  chip: {
-    backgroundColor: '#1a1a1a',
-    borderWidth: 1,
-    borderColor: '#333',
-    borderRadius: 20,
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-  },
-  chipSelected: {
-    backgroundColor: '#fff',
-    borderColor: '#fff',
-  },
-  chipText: {
-    color: '#fff',
-    fontSize: 13,
-  },
-  chipTextSelected: {
-    color: '#000',
-    fontWeight: '600',
-  },
-  priceContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-  },
-  priceInput: {
-    flex: 1,
-  },
-  input: {
-    backgroundColor: '#1a1a1a',
-    borderWidth: 1,
-    borderColor: '#333',
-    borderRadius: 12,
-    padding: 12,
-    color: '#fff',
-    fontSize: 14,
-  },
-  priceSeparator: {
-    color: '#666',
-    fontSize: 20,
-  },
-  soldToggle: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    marginTop: 4,
-  },
-  soldToggleText: {
-    color: '#fff',
     fontSize: 14,
   },
   resultsRow: {

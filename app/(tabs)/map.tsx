@@ -7,22 +7,17 @@ import {
   TouchableOpacity,
   Dimensions,
   Platform,
-  ScrollView,
 } from 'react-native';
 import CachedImage from '../../components/CachedImage';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as Location from 'expo-location';
 import { useProperties } from '../../contexts/PropertyContext';
-import {
-  Property,
-  PropertyCategory,
-  PropertyType,
-  RESIDENTIAL_PROPERTY_TYPES,
-  COMMERCIAL_PROPERTY_TYPES,
-} from '../../types/property';
+import { Property } from '../../types/property';
 import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import NativeMapView, { MapViewHandle } from '../../components/map/MapViewComponent.native';
+import { usePropertyFilters } from '../../hooks/usePropertyFilters';
+import PropertyFilters from '../../components/filters/PropertyFilters';
 
 const { width, height } = Dimensions.get('window');
 
@@ -52,7 +47,6 @@ export default function MapScreen() {
     [allProperties]
   );
 
-  const [filteredProperties, setFilteredProperties] = useState<Property[]>([]);
   const [userLocation, setUserLocation] = useState<{ latitude: number; longitude: number } | null>(null);
   const [showFilters, setShowFilters] = useState(false);
   const [selectedProperty, setSelectedProperty] = useState<Property | null>(null);
@@ -60,29 +54,21 @@ export default function MapScreen() {
   const [mapType, setMapType] = useState<'standard' | 'satellite'>('standard');
   const [isDarkMode, setIsDarkMode] = useState(false);
 
-  const [propertyCategory, setPropertyCategory] = useState<PropertyCategory | ''>('');
-  const [selectedType, setSelectedType] = useState<PropertyType | ''>();
+  const {
+    filters,
+    setFilter,
+    clearFilters,
+    filteredProperties,
+    hasActiveFilters,
+    addressOptions,
+    getPropertyTypes,
+  } = usePropertyFilters(propertiesWithLocation);
 
   useEffect(() => {
     if (Platform.OS !== 'web') {
       getCurrentLocation();
     }
   }, []);
-
-  useEffect(() => {
-    applyFilters();
-  }, [propertiesWithLocation, propertyCategory, selectedType]);
-
-  const applyFilters = () => {
-    let filtered = [...propertiesWithLocation];
-    if (propertyCategory) {
-      filtered = filtered.filter(p => p.propertyCategory === propertyCategory);
-    }
-    if (selectedType) {
-      filtered = filtered.filter(p => p.propertyType === selectedType);
-    }
-    setFilteredProperties(filtered);
-  };
 
   const getCurrentLocation = async () => {
     try {
@@ -97,8 +83,6 @@ export default function MapScreen() {
       console.error('Error getting location:', error);
     }
   };
-
-  const hasActiveFilters = !!(propertyCategory || selectedType);
 
   const formatPrice = useCallback((property: Property) => {
     if (property.floors && property.floors.length > 0) {
@@ -118,7 +102,6 @@ export default function MapScreen() {
   }, []);
 
   const getCoverPhoto = useCallback((property: Property) => {
-    // Prefer raw storage path (local-first), fall back to signed URL
     if (property.coverPhotoPath) return property.coverPhotoPath;
     if (property.propertyPhotos && property.propertyPhotos.length > 0) {
       const coverIndex = property.coverPhotoIndex || 0;
@@ -145,10 +128,8 @@ export default function MapScreen() {
 
   const cycleMapType = () => {
     if (Platform.OS === 'ios') {
-      // Apple Maps: toggle between standard and satellite (no dark mode style)
       setMapType(mapType === 'standard' ? 'satellite' : 'standard');
     } else {
-      // Google Maps: cycle standard → dark → satellite
       if (mapType === 'standard' && !isDarkMode) {
         setIsDarkMode(true);
       } else if (mapType === 'standard' && isDarkMode) {
@@ -174,23 +155,24 @@ export default function MapScreen() {
     });
   };
 
-  const handleMyLocation = () => {
-    if (userLocation) {
+  const handleMyLocation = async () => {
+    try {
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== 'granted') return;
+      const location = await Location.getCurrentPositionAsync({});
+      const coords = {
+        latitude: location.coords.latitude,
+        longitude: location.coords.longitude,
+      };
+      setUserLocation(coords);
       mapViewRef.current?.animateToRegion({
-        latitude: userLocation.latitude,
-        longitude: userLocation.longitude,
+        ...coords,
         latitudeDelta: 0.01,
         longitudeDelta: 0.01,
       });
-    } else {
-      getCurrentLocation();
+    } catch (error) {
+      console.error('Error getting current location:', error);
     }
-  };
-
-  const getPropertyTypes = (): PropertyType[] => {
-    if (propertyCategory === 'Residential') return RESIDENTIAL_PROPERTY_TYPES;
-    if (propertyCategory === 'Commercial') return COMMERCIAL_PROPERTY_TYPES;
-    return [...RESIDENTIAL_PROPERTY_TYPES, ...COMMERCIAL_PROPERTY_TYPES];
   };
 
   const getInitialRegion = () => {
@@ -271,60 +253,15 @@ export default function MapScreen() {
       {/* Filters panel */}
       {showFilters && (
         <View style={[styles.filtersPanel, { bottom: controlsBottom + 56 }]}>
-          <View style={styles.filtersHeader}>
-            <Text style={styles.filtersTitle}>Filters</Text>
-            {hasActiveFilters && (
-              <TouchableOpacity onPress={() => { setPropertyCategory(''); setSelectedType(''); }}>
-                <Text style={styles.clearText}>Clear</Text>
-              </TouchableOpacity>
-            )}
-          </View>
-
-          <View style={styles.filterSection}>
-            <Text style={styles.filterLabel}>Category</Text>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-              <View style={styles.chipRow}>
-                <TouchableOpacity
-                  style={[styles.chip, !propertyCategory && styles.chipSelected]}
-                  onPress={() => { setPropertyCategory(''); setSelectedType(''); }}
-                >
-                  <Text style={[styles.chipText, !propertyCategory && styles.chipTextSelected]}>All</Text>
-                </TouchableOpacity>
-                {(['Residential', 'Commercial'] as PropertyCategory[]).map((cat) => (
-                  <TouchableOpacity
-                    key={cat}
-                    style={[styles.chip, propertyCategory === cat && styles.chipSelected]}
-                    onPress={() => { setPropertyCategory(cat); setSelectedType(''); }}
-                  >
-                    <Text style={[styles.chipText, propertyCategory === cat && styles.chipTextSelected]}>{cat}</Text>
-                  </TouchableOpacity>
-                ))}
-              </View>
-            </ScrollView>
-          </View>
-
-          <View style={styles.filterSection}>
-            <Text style={styles.filterLabel}>Type</Text>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-              <View style={styles.chipRow}>
-                <TouchableOpacity
-                  style={[styles.chip, !selectedType && styles.chipSelected]}
-                  onPress={() => setSelectedType('')}
-                >
-                  <Text style={[styles.chipText, !selectedType && styles.chipTextSelected]}>All</Text>
-                </TouchableOpacity>
-                {getPropertyTypes().map((type) => (
-                  <TouchableOpacity
-                    key={type}
-                    style={[styles.chip, selectedType === type && styles.chipSelected]}
-                    onPress={() => setSelectedType(type)}
-                  >
-                    <Text style={[styles.chipText, selectedType === type && styles.chipTextSelected]}>{type}</Text>
-                  </TouchableOpacity>
-                ))}
-              </View>
-            </ScrollView>
-          </View>
+          <PropertyFilters
+            filters={filters}
+            setFilter={setFilter}
+            clearFilters={clearFilters}
+            hasActiveFilters={hasActiveFilters}
+            addressOptions={addressOptions}
+            getPropertyTypes={getPropertyTypes}
+            variant="panel"
+          />
         </View>
       )}
 
@@ -419,59 +356,12 @@ const styles = StyleSheet.create({
   filtersPanel: {
     position: 'absolute',
     right: 16,
-    width: 280,
+    width: 300,
     backgroundColor: 'rgba(26, 26, 26, 0.95)',
     borderRadius: 14,
-    padding: 14,
     borderWidth: 1,
     borderColor: 'rgba(255, 255, 255, 0.1)',
-  },
-  filtersHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 12,
-  },
-  filtersTitle: {
-    color: '#fff',
-    fontSize: 15,
-    fontWeight: '600',
-  },
-  clearText: {
-    color: '#999',
-    fontSize: 12,
-  },
-  filterSection: {
-    marginBottom: 10,
-  },
-  filterLabel: {
-    color: '#666',
-    fontSize: 11,
-    marginBottom: 6,
-    fontWeight: '600',
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
-  },
-  chipRow: {
-    flexDirection: 'row',
-    gap: 6,
-  },
-  chip: {
-    backgroundColor: 'rgba(255, 255, 255, 0.08)',
-    borderRadius: 14,
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-  },
-  chipSelected: {
-    backgroundColor: '#fff',
-  },
-  chipText: {
-    color: '#999',
-    fontSize: 12,
-  },
-  chipTextSelected: {
-    color: '#000',
-    fontWeight: '600',
+    overflow: 'hidden',
   },
 
   // Property card

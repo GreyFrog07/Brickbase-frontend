@@ -632,6 +632,15 @@ export default function PropertyDetailsScreen() {
               <Text style={styles.coordsText}>
                 {property.latitude.toFixed(6)}, {property.longitude.toFixed(6)}
               </Text>
+              <TouchableOpacity
+                style={styles.getDirectionsBtn}
+                onPress={() => {
+                  Linking.openURL(`https://www.google.com/maps/dir/?api=1&destination=${property.latitude},${property.longitude}`);
+                }}
+              >
+                <Ionicons name="navigate" size={18} color="#fff" />
+                <Text style={styles.getDirectionsText}>Get Directions</Text>
+              </TouchableOpacity>
             </View>
           )}
 
@@ -1179,6 +1188,22 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontFamily: 'monospace',
     marginTop: 8,
+  },
+  getDirectionsBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#4285F4',
+    borderRadius: 8,
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    marginTop: 10,
+    gap: 8,
+  },
+  getDirectionsText: {
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: '600',
   },
   // Full map modal
   mapModalContainer: {
