@@ -99,8 +99,32 @@ export interface Property {
   importantFiles?: ImportantFile[];
   bhk?: number;
   isSold?: boolean;
+  orgId?: string;
   createdAt?: string;
   updatedAt?: string;
+}
+
+// ── Organization types ──────────────────────────────────────────────────
+
+export interface OrganizationMember {
+  id: string;
+  userId: string;
+  role: 'admin' | 'member';
+  joinedAt?: string;
+  name?: string;
+  email?: string;
+  phone?: string;
+  profilePhotoUrl?: string;
+}
+
+export interface Organization {
+  id: string;
+  name: string;
+  createdBy?: string;
+  inviteCode?: string;
+  createdAt?: string;
+  updatedAt?: string;
+  members: OrganizationMember[];
 }
 
 export interface Builder {

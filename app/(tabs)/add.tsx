@@ -50,10 +50,11 @@ import {
 } from '../../types/property';
 import { useLocalSearchParams, router, useFocusEffect } from 'expo-router';
 import api from '../../lib/api';
-import { addToPendingQueue } from '../../lib/cache';
+import { addToPendingQueue, addToPendingUpdates } from '../../lib/cache';
 import { cacheLocalImage } from '../../lib/imageCache';
 import { getUserFolder, uploadToStorage } from '../../lib/supabase';
 import { useProperties } from '../../contexts/PropertyContext';
+import { useOrganization } from '../../contexts/OrganizationContext';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 const MAX_CONTENT_WIDTH = 500;
@@ -121,6 +122,7 @@ function FullscreenVideoItem({ uri, index, total, isActive }: { uri: string; ind
 export default function AddPropertyScreen() {
   const { user } = useAuth();
   const { addPropertyToState, updatePropertyInState, replacePropertyInState } = useProperties();
+  const { currentOrg } = useOrganization();
   const params = useLocalSearchParams();
   const editPropertyId = params.editPropertyId as string | undefined;
   const insets = useSafeAreaInsets();
@@ -224,6 +226,9 @@ export default function AddPropertyScreen() {
   const [showPriceDropdown, setShowPriceDropdown] = useState(false);
   const [activeFloorDropdown, setActiveFloorDropdown] = useState<number | null>(null);
   const [showSizeUnitDropdown, setShowSizeUnitDropdown] = useState<number | null>(null);
+
+  // Organization visibility — null = personal, orgId = shared with org
+  const [selectedOrgId, setSelectedOrgId] = useState<string | null>(null);
 
   // Validation errors
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -448,6 +453,9 @@ export default function AddPropertyScreen() {
       setCornerProperty(property.cornerProperty);
       setPropertyAge(property.propertyAge?.toString() || '');
       
+      // Preserve org visibility setting
+      setSelectedOrgId(property.orgId || null);
+
       // Load cover photo index
       setCoverPhotoIndex(property.coverPhotoIndex ?? 0);
 
@@ -516,6 +524,7 @@ export default function AddPropertyScreen() {
     setGatedProperty(false);
     setCornerProperty(false);
     setPropertyAge('');
+    setSelectedOrgId(null);
     setIsEditMode(false);
     setErrors({});
   };
@@ -1100,6 +1109,7 @@ export default function AddPropertyScreen() {
       bhk: bhk ? parseInt(bhk) : null,
       latitude: photoWithLocation?.location?.coords.latitude || null,
       longitude: photoWithLocation?.location?.coords.longitude || null,
+      orgId: selectedOrgId || null,
     };
 
     if (isEditMode && editPropertyId) {
@@ -1295,10 +1305,22 @@ export default function AddPropertyScreen() {
       console.log('Property update synced successfully');
     } catch (error: any) {
       console.error('Background update sync failed:', error);
+      // Queue for retry on next app open / pull-to-refresh
+      if (user) {
+        await addToPendingUpdates(user.id, {
+          propertyId,
+          data: {
+            ...baseData,
+            propertyPhotos: photoUrls,
+            propertyVideos: videoUrls,
+            importantFiles: uploadedFiles,
+          },
+        });
+      }
       // Don't overwrite local state — the optimistic version with local images stays visible
       Alert.alert(
         'Sync Issue',
-        'Property updated locally but failed to sync. Will retry on next refresh.',
+        'Property updated locally but failed to sync. Changes will be retried automatically.',
         [{ text: 'OK' }]
       );
     }
@@ -2209,6 +2231,44 @@ export default function AddPropertyScreen() {
               />
             </View>
 
+            {/* Organization Visibility (only shown if user is in an org) */}
+            {currentOrg && (
+              <View style={styles.section}>
+                <Text style={styles.label}>Visibility</Text>
+                <Text style={styles.helperText}>
+                  Shared properties are visible to all members of your organization.
+                </Text>
+                <View style={styles.visibilityRow}>
+                  <TouchableOpacity
+                    style={[styles.visibilityBtn, selectedOrgId === null && styles.visibilityBtnActive]}
+                    onPress={() => setSelectedOrgId(null)}
+                  >
+                    <Ionicons
+                      name="person-outline"
+                      size={16}
+                      color={selectedOrgId === null ? '#000' : '#999'}
+                    />
+                    <Text style={[styles.visibilityBtnText, selectedOrgId === null && styles.visibilityBtnTextActive]}>
+                      Personal
+                    </Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[styles.visibilityBtn, selectedOrgId === currentOrg.id && styles.visibilityBtnActive]}
+                    onPress={() => setSelectedOrgId(currentOrg.id)}
+                  >
+                    <Ionicons
+                      name="people-outline"
+                      size={16}
+                      color={selectedOrgId === currentOrg.id ? '#000' : '#999'}
+                    />
+                    <Text style={[styles.visibilityBtnText, selectedOrgId === currentOrg.id && styles.visibilityBtnTextActive]}>
+                      {currentOrg.name}
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            )}
+
             {/* Submit Button */}
             <TouchableOpacity
               style={[styles.submitButton, loading && styles.submitButtonDisabled]}
@@ -2994,6 +3054,40 @@ const styles = StyleSheet.create({
     color: '#000',
     fontSize: 16,
     fontWeight: 'bold',
+  },
+  helperText: {
+    color: '#666',
+    fontSize: 12,
+    marginBottom: 10,
+    lineHeight: 16,
+  },
+  visibilityRow: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  visibilityBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    padding: 12,
+    borderRadius: 10,
+    backgroundColor: '#1a1a1a',
+    borderWidth: 1,
+    borderColor: '#333',
+  },
+  visibilityBtnActive: {
+    backgroundColor: '#fff',
+    borderColor: '#fff',
+  },
+  visibilityBtnText: {
+    color: '#999',
+    fontSize: 14,
+    fontWeight: '500',
+  },
+  visibilityBtnTextActive: {
+    color: '#000',
   },
   // Media Gallery Styles
   viewGalleryButton: {

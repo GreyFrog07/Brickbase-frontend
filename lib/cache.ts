@@ -6,6 +6,7 @@ const CACHE_KEYS = {
   PROPERTIES: (userId: string) => `properties_${userId}`,
   PROPERTIES_TIMESTAMP: (userId: string) => `properties_ts_${userId}`,
   PENDING_PROPERTIES: (userId: string) => `pending_${userId}`,
+  PENDING_UPDATES: (userId: string) => `pending_updates_${userId}`,
   LAST_SYNC_AT: (userId: string) => `last_sync_at_${userId}`,
 };
 
@@ -34,7 +35,9 @@ export const setLastSyncAt = async (userId: string, serverTime: string): Promise
 
 export const cacheProperties = async (userId: string, properties: Property[]): Promise<void> => {
   try {
-    await AsyncStorage.setItem(CACHE_KEYS.PROPERTIES(userId), JSON.stringify(properties));
+    // Never persist temp_ items — they belong only to the pending queue
+    const confirmed = properties.filter(p => !p.id.startsWith('temp_'));
+    await AsyncStorage.setItem(CACHE_KEYS.PROPERTIES(userId), JSON.stringify(confirmed));
     await AsyncStorage.setItem(CACHE_KEYS.PROPERTIES_TIMESTAMP(userId), Date.now().toString());
   } catch (error) {
     console.error('Error caching properties:', error);
@@ -45,7 +48,9 @@ export const getCachedProperties = async (userId: string): Promise<Property[] | 
   try {
     const cached = await AsyncStorage.getItem(CACHE_KEYS.PROPERTIES(userId));
     if (cached) {
-      return JSON.parse(cached);
+      const parsed: Property[] = JSON.parse(cached);
+      // Filter out any stale temp_ items that may have been cached before this fix
+      return parsed.filter(p => !p.id.startsWith('temp_'));
     }
     return null;
   } catch (error) {
@@ -54,7 +59,7 @@ export const getCachedProperties = async (userId: string): Promise<Property[] | 
   }
 };
 
-// ── Merge server delta into local state (server-wins) ──────────────────
+// ── Merge server delta into local state (server-wins with timestamp guard) ──
 
 export const mergeServerProperties = (
   localProperties: Property[],
@@ -68,13 +73,17 @@ export const mergeServerProperties = (
     serverMap.set(prop.id, prop);
   }
 
-  // Update existing properties in-place (server wins)
+  // Update existing properties in-place
   const updatedIds = new Set<string>();
   const merged = localProperties.map(local => {
     const serverVersion = serverMap.get(local.id);
     if (serverVersion) {
       updatedIds.add(local.id);
-      return serverVersion;
+      // Merge guard: keep local if it's newer than what the server returned
+      // (guards against stale delta when updated_at trigger was missing)
+      const serverTs = serverVersion.updatedAt ? new Date(serverVersion.updatedAt).getTime() : 0;
+      const localTs = local.updatedAt ? new Date(local.updatedAt).getTime() : 0;
+      return serverTs >= localTs ? serverVersion : local;
     }
     return local;
   });
@@ -89,7 +98,7 @@ export const mergeServerProperties = (
   return merged;
 };
 
-// ── Pending properties queue (per-user) ────────────────────────────────
+// ── Pending properties queue (failed creates — per-user) ───────────────
 
 export interface PendingProperty {
   id: string;
@@ -165,19 +174,89 @@ export const removeFromPendingQueue = async (userId: string, pendingId: string):
   }
 };
 
-// ── Optimistic property helpers ────────────────────────────────────────
+// ── Pending updates queue (failed PUTs — per-user) ─────────────────────
 
-export const addOptimisticProperty = async (userId: string, property: Property): Promise<void> => {
+export interface PendingUpdate {
+  id: string;           // pending_update_<timestamp>_<random>
+  propertyId: string;   // real DB id (never temp_)
+  data: any;            // full PUT payload (storage paths already uploaded)
+  timestamp: number;
+  retryCount: number;
+  status: 'pending' | 'syncing' | 'failed';
+}
+
+export const addToPendingUpdates = async (userId: string, update: { propertyId: string; data: any }): Promise<string> => {
   try {
-    const cached = await getCachedProperties(userId);
-    if (cached) {
-      cached.unshift(property);
-      await cacheProperties(userId, cached);
-    }
+    const updateId = `pending_update_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    const pending: PendingUpdate = {
+      id: updateId,
+      propertyId: update.propertyId,
+      data: update.data,
+      timestamp: Date.now(),
+      retryCount: 0,
+      status: 'pending',
+    };
+
+    const existingQueue = await getPendingUpdates(userId);
+    // De-duplicate: if there's already a pending update for this property, replace it with the newer one
+    const filtered = existingQueue.filter(u => u.propertyId !== update.propertyId);
+    filtered.push(pending);
+    await AsyncStorage.setItem(CACHE_KEYS.PENDING_UPDATES(userId), JSON.stringify(filtered));
+
+    return updateId;
   } catch (error) {
-    console.error('Error adding optimistic property:', error);
+    console.error('Error adding to pending updates:', error);
+    throw error;
   }
 };
+
+export const getPendingUpdates = async (userId: string): Promise<PendingUpdate[]> => {
+  try {
+    const queue = await AsyncStorage.getItem(CACHE_KEYS.PENDING_UPDATES(userId));
+    if (queue) {
+      return JSON.parse(queue);
+    }
+    return [];
+  } catch (error) {
+    console.error('Error getting pending updates:', error);
+    return [];
+  }
+};
+
+export const updatePendingUpdateStatus = async (
+  userId: string,
+  updateId: string,
+  status: 'pending' | 'syncing' | 'failed',
+  retryCount?: number
+): Promise<void> => {
+  try {
+    const queue = await getPendingUpdates(userId);
+    const index = queue.findIndex(u => u.id === updateId);
+    if (index !== -1) {
+      queue[index].status = status;
+      if (retryCount !== undefined) {
+        queue[index].retryCount = retryCount;
+      }
+      await AsyncStorage.setItem(CACHE_KEYS.PENDING_UPDATES(userId), JSON.stringify(queue));
+    }
+  } catch (error) {
+    console.error('Error updating pending update status:', error);
+  }
+};
+
+export const removeFromPendingUpdates = async (userId: string, updateId: string): Promise<void> => {
+  try {
+    const queue = await getPendingUpdates(userId);
+    const filtered = queue.filter(u => u.id !== updateId);
+    await AsyncStorage.setItem(CACHE_KEYS.PENDING_UPDATES(userId), JSON.stringify(filtered));
+  } catch (error) {
+    console.error('Error removing from pending updates:', error);
+  }
+};
+
+// ── Optimistic property helpers ────────────────────────────────────────
+// Note: addOptimisticProperty intentionally does NOT write temp_ items to cache.
+// Temp properties live only in memory + pending queue during the current session.
 
 export const updateOptimisticProperty = async (
   userId: string,
@@ -218,6 +297,7 @@ export const clearUserCache = async (userId: string): Promise<void> => {
       CACHE_KEYS.PROPERTIES(userId),
       CACHE_KEYS.PROPERTIES_TIMESTAMP(userId),
       CACHE_KEYS.PENDING_PROPERTIES(userId),
+      CACHE_KEYS.PENDING_UPDATES(userId),
       CACHE_KEYS.LAST_SYNC_AT(userId),
     ]);
   } catch (error) {
@@ -232,6 +312,7 @@ export const clearAllCache = async (): Promise<void> => {
       key.startsWith('properties_') ||
       key.startsWith('properties_ts_') ||
       key.startsWith('pending_') ||
+      key.startsWith('pending_updates_') ||
       key.startsWith('last_sync_at_') ||
       key === 'add_property_draft'
     );

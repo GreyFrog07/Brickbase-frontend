@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useMemo } from 'react';
 import {
   View,
   Text,
@@ -12,6 +12,7 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../../contexts/AuthContext';
 import { useProperties } from '../../contexts/PropertyContext';
+import { useOrganization } from '../../contexts/OrganizationContext';
 import { Property } from '../../types/property';
 import { router } from 'expo-router';
 import GridPropertyCard from '../../components/search/GridPropertyCard';
@@ -25,9 +26,20 @@ export default function SearchScreen() {
   const { user } = useAuth();
   const insets = useSafeAreaInsets();
   const { properties, loading, refreshing, syncing, onRefresh } = useProperties();
+  const { currentOrg } = useOrganization();
   const [shareProperty, setShareProperty] = useState<Property | null>(null);
   const [showFilters, setShowFilters] = useState(false);
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
+  // 'all' = personal + org, 'personal' = only mine, 'org' = only org shared
+  const [orgFilter, setOrgFilter] = useState<'all' | 'personal' | 'org'>('all');
+
+  // Apply org filter before passing to the text/field filter hook
+  const orgFilteredProperties = useMemo(() => {
+    if (!currentOrg || orgFilter === 'all') return properties;
+    if (orgFilter === 'org') return properties.filter(p => p.orgId === currentOrg.id);
+    // 'personal' = properties that belong to this user only (no org share)
+    return properties.filter(p => !p.orgId || p.orgId !== currentOrg.id);
+  }, [properties, currentOrg, orgFilter]);
 
   const {
     filters,
@@ -37,7 +49,7 @@ export default function SearchScreen() {
     hasActiveFilters,
     addressOptions,
     getPropertyTypes,
-  } = usePropertyFilters(properties);
+  } = usePropertyFilters(orgFilteredProperties);
 
   const handlePropertyPress = (property: Property) => {
     router.push({
@@ -94,7 +106,7 @@ export default function SearchScreen() {
     );
   }, [viewMode]);
 
-  const listHeader = (
+  const listHeader = useMemo(() => (
     <>
       {/* Search Bar */}
       <View style={styles.searchSection}>
@@ -142,6 +154,23 @@ export default function SearchScreen() {
         />
       )}
 
+      {/* Org filter chips — only shown when user is in an org */}
+      {currentOrg && (
+        <View style={styles.orgFilterRow}>
+          {(['all', 'personal', 'org'] as const).map(option => (
+            <TouchableOpacity
+              key={option}
+              style={[styles.orgFilterChip, orgFilter === option && styles.orgFilterChipActive]}
+              onPress={() => setOrgFilter(option)}
+            >
+              <Text style={[styles.orgFilterChipText, orgFilter === option && styles.orgFilterChipTextActive]}>
+                {option === 'all' ? 'All' : option === 'personal' ? 'Personal' : currentOrg.name}
+              </Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+      )}
+
       {/* Results Count + View Toggle */}
       <View style={styles.resultsRow}>
         <Text style={styles.resultsCount}>
@@ -163,7 +192,8 @@ export default function SearchScreen() {
         </View>
       </View>
     </>
-  );
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  ), [showFilters, filters, filteredProperties.length, viewMode, hasActiveFilters, addressOptions, getPropertyTypes, currentOrg, orgFilter]);
 
   // Show skeleton cards on first load (no cached data yet)
   if (loading && properties.length === 0) {
@@ -203,9 +233,10 @@ export default function SearchScreen() {
         refreshControl={
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#fff" />
         }
-        initialNumToRender={8}
-        maxToRenderPerBatch={8}
-        windowSize={5}
+        initialNumToRender={10}
+        maxToRenderPerBatch={10}
+        windowSize={10}
+        updateCellsBatchingPeriod={50}
         removeClippedSubviews
       />
 
@@ -316,5 +347,31 @@ const styles = StyleSheet.create({
     color: '#666',
     fontSize: 14,
     marginTop: 4,
+  },
+  orgFilterRow: {
+    flexDirection: 'row',
+    gap: 8,
+    paddingHorizontal: 16,
+    paddingBottom: 8,
+  },
+  orgFilterChip: {
+    paddingHorizontal: 14,
+    paddingVertical: 6,
+    borderRadius: 20,
+    backgroundColor: '#1a1a1a',
+    borderWidth: 1,
+    borderColor: '#333',
+  },
+  orgFilterChipActive: {
+    backgroundColor: '#fff',
+    borderColor: '#fff',
+  },
+  orgFilterChipText: {
+    color: '#666',
+    fontSize: 13,
+    fontWeight: '500',
+  },
+  orgFilterChipTextActive: {
+    color: '#000',
   },
 });

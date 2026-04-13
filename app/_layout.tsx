@@ -2,6 +2,7 @@ import React, { useEffect } from 'react';
 import { Stack } from 'expo-router';
 import { AuthProvider, useAuth } from '../contexts/AuthContext';
 import { PropertyProvider } from '../contexts/PropertyContext';
+import { OrganizationProvider } from '../contexts/OrganizationContext';
 import { router } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 
@@ -41,7 +42,9 @@ export default function RootLayout() {
   return (
     <AuthProvider>
       <PropertyProvider>
-        <RootLayoutNav />
+        <OrganizationProvider>
+          <RootLayoutNav />
+        </OrganizationProvider>
       </PropertyProvider>
     </AuthProvider>
   );
