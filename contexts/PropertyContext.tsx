@@ -193,8 +193,6 @@ export const PropertyProvider = ({ children }: { children: React.ReactNode }) =>
           cacheProperties(user.id, prev);
           return prev;
         });
-
-        setSyncing(false);
       }
 
       initialLoadDone.current = true;
@@ -202,6 +200,7 @@ export const PropertyProvider = ({ children }: { children: React.ReactNode }) =>
       console.error('Error syncing properties:', error);
     } finally {
       if (showLoading) setLoading(false);
+      setSyncing(false); // Always clear — guards against errors mid-paginated-sync
       syncInProgress.current = false;
     }
   };
@@ -234,23 +233,26 @@ export const PropertyProvider = ({ children }: { children: React.ReactNode }) =>
         const response = await api.post('/properties', item.data);
         await removeFromPendingQueue(user.id, item.id);
 
-        // Replace temp property with real one from server
+        // Replace temp property with real one from server.
+        // After app restart temp_ items are filtered from cache/state, so we must
+        // ADD the real property if the temp_ is no longer present in state.
         if (item.data._tempId) {
           const realProperty: Property = response.data;
-          const tempProp = properties.find(p => p.id === item.data._tempId);
-          const tempHasPhotos = tempProp?.propertyPhotos && tempProp.propertyPhotos.length > 0;
-          const serverHasPhotos = realProperty.propertyPhotos && realProperty.propertyPhotos.length > 0;
-
-          if (!tempHasPhotos || serverHasPhotos) {
-            setProperties(prev => prev.map(p => p.id === item.data._tempId ? realProperty : p));
-          } else {
-            // Server version has no images but temp does — merge: use server ID + temp images
-            setProperties(prev => prev.map(p =>
-              p.id === item.data._tempId
-                ? { ...realProperty, propertyPhotos: p.propertyPhotos, propertyVideos: p.propertyVideos }
-                : p
-            ));
-          }
+          setProperties(prev => {
+            const tempIndex = prev.findIndex(p => p.id === item.data._tempId);
+            if (tempIndex === -1) {
+              // Temp was filtered on startup — add the real property at the top
+              return [realProperty, ...prev];
+            }
+            const tempProp = prev[tempIndex];
+            const tempHasPhotos = tempProp?.propertyPhotos && tempProp.propertyPhotos.length > 0;
+            const serverHasPhotos = realProperty.propertyPhotos && realProperty.propertyPhotos.length > 0;
+            const replacement = (!tempHasPhotos || serverHasPhotos)
+              ? realProperty
+              // Server version has no images but temp does — keep temp's media
+              : { ...realProperty, propertyPhotos: tempProp.propertyPhotos, propertyVideos: tempProp.propertyVideos };
+            return prev.map(p => p.id === item.data._tempId ? replacement : p);
+          });
         }
 
         console.log(`Pending property ${item.id} synced successfully`);
