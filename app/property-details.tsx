@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   View,
   Text,
@@ -32,7 +32,15 @@ export default function PropertyDetailsScreen() {
   const { propertyId } = useLocalSearchParams();
   const insets = useSafeAreaInsets();
   const { properties: allProperties, removePropertyFromState } = useProperties();
-  const [property, setProperty] = useState<Property | null>(null);
+  // Derive directly from context — auto-updates whenever PropertyContext changes
+  // (e.g. after edit, the details screen reflects new data without re-mounting)
+  const contextProperty = useMemo(
+    () => allProperties.find(p => p.id === (propertyId as string)) ?? null,
+    [allProperties, propertyId],
+  );
+  // Only used when the property is not yet in context (edge case / deep link)
+  const [apiProperty, setApiProperty] = useState<Property | null>(null);
+  const property = contextProperty ?? apiProperty;
   const [loading, setLoading] = useState(true);
   const [currentImageIndex, setCurrentImageIndex] = useState(0);
   const [showShareModal, setShowShareModal] = useState(false);
@@ -42,11 +50,23 @@ export default function PropertyDetailsScreen() {
   const [nearbyProperties, setNearbyProperties] = useState<Property[]>([]);
   const [loadingNearby, setLoadingNearby] = useState(false);
 
+  // When contextProperty is available, mark loading done immediately.
+  // When absent (deep link or context not yet populated), fall back to a
+  // direct API fetch so the screen still works in that edge case.
   useEffect(() => {
-    if (propertyId) {
-      loadPropertyDetails();
+    if (contextProperty) {
+      setLoading(false);
+      return;
     }
-  }, [propertyId]);
+    if (!propertyId) return;
+    setLoading(true);
+    api.get(`/properties/${propertyId}`)
+      .then(r => { setApiProperty(r.data); setLoading(false); })
+      .catch(() => {
+        Alert.alert('Error', 'Failed to load property details');
+        setLoading(false);
+      });
+  }, [contextProperty, propertyId]);
 
   // Generate video thumbnails — resolve storage paths to local URIs first
   useEffect(() => {
@@ -68,28 +88,6 @@ export default function PropertyDetailsScreen() {
         .catch(() => {});
     });
   }, [property?.propertyVideos]);
-
-  const loadPropertyDetails = async () => {
-    // Try local state first (instant)
-    const localProperty = allProperties.find(p => p.id === propertyId);
-    if (localProperty) {
-      setProperty(localProperty);
-      setLoading(false);
-      return;
-    }
-
-    // Fallback to API if not in local state (edge case)
-    try {
-      setLoading(true);
-      const response = await api.get(`/properties/${propertyId}`);
-      setProperty(response.data);
-    } catch (error) {
-      console.error('Error fetching property:', error);
-      Alert.alert('Error', 'Failed to load property details');
-    } finally {
-      setLoading(false);
-    }
-  };
 
   const handleDelete = () => {
     Alert.alert(

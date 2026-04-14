@@ -99,23 +99,38 @@ export const PropertyProvider = ({ children }: { children: React.ReactNode }) =>
     if (!user) return;
     setLoading(true);
 
-    // 1. Load from cache — temp_ items are already filtered by getCachedProperties
+    // 1. Crash-recovery guard: lastSyncAt was written after page 1 of the initial
+    //    paginated sync, but cacheProperties was not (app was killed between the two).
+    //    Next boot has lastSyncAt = T1 but an empty cache, so syncFromServer would
+    //    take the incremental path and merge only the 2-item delta into an empty state.
+    //    Reset lastSyncAt to '' so syncFromServer does a full paginated re-sync instead.
+    //    NOTE: fresh install → lastSync = null → condition is false → does NOT fire.
+    const lastSync = await getLastSyncAt(user.id);
     const cached = await getCachedProperties(user.id);
+    if (lastSync && (!cached || cached.length === 0)) {
+      await setLastSyncAt(user.id, '');
+    }
+
+    // 2. Load from cache (temp_ items already filtered by getCachedProperties)
     if (cached && cached.length > 0) {
       setProperties(cached);
       setLoading(false);
       initialLoadDone.current = true;
-
-      // Background sync for changes since last sync
-      syncFromServer(false);
-    } else {
-      // No cache — full initial sync (show loading)
-      await syncFromServer(true);
     }
 
-    // 2. Process any pending uploads / updates from previous sessions
+    // 3. Drain pending operations BEFORE syncing — ensures server already has the
+    //    latest mutations before we fetch fresh state, so the sync reflects them.
     await processPendingQueue();
     await processPendingUpdates();
+
+    // 4. Fetch fresh state from server (after queue is drained)
+    if (cached && cached.length > 0) {
+      // Cache was shown already — sync in background
+      syncFromServer(false);
+    } else {
+      // Nothing shown yet — block until sync completes
+      await syncFromServer(true);
+    }
   };
 
   // ── Sync engine ──────────────────────────────────────────────────────
@@ -129,7 +144,9 @@ export const PropertyProvider = ({ children }: { children: React.ReactNode }) =>
 
       const lastSync = await getLastSyncAt(user.id);
 
-      if (lastSync) {
+      // Treat '' the same as null — crash-recovery guard in loadInitial writes ''
+      // to force a full paginated re-sync after a mid-sync crash.
+      if (lastSync && lastSync.length > 0) {
         // Incremental sync: fetch changes + all current IDs for deletion detection
         const response = await api.get('/properties/sync', {
           params: { since: lastSync },
@@ -162,6 +179,11 @@ export const PropertyProvider = ({ children }: { children: React.ReactNode }) =>
         const limit = 50;
         let hasMore = true;
         setSyncing(true);
+        // Capture serverTime from page 1 (reflects DB state before the query ran)
+        // but do NOT write it to disk yet — only write after the full loop AND
+        // cacheProperties both complete, so a crash between writes can't leave
+        // lastSyncAt pointing to a time with no matching cache.
+        let firstPageServerTime: string | undefined;
 
         while (hasMore) {
           const response = await api.get('/properties/sync', {
@@ -182,17 +204,22 @@ export const PropertyProvider = ({ children }: { children: React.ReactNode }) =>
           hasMore = more;
           offset += limit;
 
-          // Save serverTime from the first page (captured before any query)
+          // Capture serverTime from the first page only (before any data changes)
           if (offset === limit) {
-            await setLastSyncAt(user.id, serverTime);
+            firstPageServerTime = serverTime;
           }
         }
 
-        // Cache the final complete set (cacheProperties strips temp_ internally)
+        // Write cache first, then lastSyncAt — both must succeed before the app
+        // is considered fully synced. If killed here, the next boot detects
+        // lastSyncAt=null (or the crash-recovery guard resets it) and re-syncs fully.
         setProperties(prev => {
           cacheProperties(user.id, prev);
           return prev;
         });
+        if (firstPageServerTime) {
+          await setLastSyncAt(user.id, firstPageServerTime);
+        }
       }
 
       initialLoadDone.current = true;

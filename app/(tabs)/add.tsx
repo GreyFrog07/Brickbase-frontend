@@ -122,7 +122,14 @@ function FullscreenVideoItem({ uri, index, total, isActive }: { uri: string; ind
 export default function AddPropertyScreen() {
   const { user } = useAuth();
   const { addPropertyToState, updatePropertyInState, replacePropertyInState } = useProperties();
-  const { currentOrg } = useOrganization();
+  const { currentOrg, organizations } = useOrganization();
+  // Determine the logged-in user's role in their org (if any)
+  // Members must always share properties with the org — cannot go personal
+  const myOrgRole = currentOrg
+    ? organizations.find(o => o.id === currentOrg.id)
+        ?.members.find(m => m.userId === user?.id)?.role
+    : undefined;
+  const isMember = myOrgRole === 'member';
   const params = useLocalSearchParams();
   const editPropertyId = params.editPropertyId as string | undefined;
   const insets = useSafeAreaInsets();
@@ -453,8 +460,12 @@ export default function AddPropertyScreen() {
       setCornerProperty(property.cornerProperty);
       setPropertyAge(property.propertyAge?.toString() || '');
       
-      // Preserve org visibility setting
-      setSelectedOrgId(property.orgId || null);
+      // Preserve org visibility setting; for members, always default to their org
+      setSelectedOrgId(
+        isMember && currentOrg
+          ? currentOrg.id
+          : (property.orgId || null)
+      );
 
       // Load cover photo index
       setCoverPhotoIndex(property.coverPhotoIndex ?? 0);
@@ -524,7 +535,8 @@ export default function AddPropertyScreen() {
     setGatedProperty(false);
     setCornerProperty(false);
     setPropertyAge('');
-    setSelectedOrgId(null);
+    // Members always share with their org; default personal for admins / no-org users
+    setSelectedOrgId(isMember && currentOrg ? currentOrg.id : null);
     setIsEditMode(false);
     setErrors({});
   };
@@ -2239,19 +2251,22 @@ export default function AddPropertyScreen() {
                   Shared properties are visible to all members of your organization.
                 </Text>
                 <View style={styles.visibilityRow}>
-                  <TouchableOpacity
-                    style={[styles.visibilityBtn, selectedOrgId === null && styles.visibilityBtnActive]}
-                    onPress={() => setSelectedOrgId(null)}
-                  >
-                    <Ionicons
-                      name="person-outline"
-                      size={16}
-                      color={selectedOrgId === null ? '#000' : '#999'}
-                    />
-                    <Text style={[styles.visibilityBtnText, selectedOrgId === null && styles.visibilityBtnTextActive]}>
-                      Personal
-                    </Text>
-                  </TouchableOpacity>
+                  {/* Personal button — hidden for members (they must always share with org) */}
+                  {!isMember && (
+                    <TouchableOpacity
+                      style={[styles.visibilityBtn, selectedOrgId === null && styles.visibilityBtnActive]}
+                      onPress={() => setSelectedOrgId(null)}
+                    >
+                      <Ionicons
+                        name="person-outline"
+                        size={16}
+                        color={selectedOrgId === null ? '#000' : '#999'}
+                      />
+                      <Text style={[styles.visibilityBtnText, selectedOrgId === null && styles.visibilityBtnTextActive]}>
+                        Personal
+                      </Text>
+                    </TouchableOpacity>
+                  )}
                   <TouchableOpacity
                     style={[styles.visibilityBtn, selectedOrgId === currentOrg.id && styles.visibilityBtnActive]}
                     onPress={() => setSelectedOrgId(currentOrg.id)}
