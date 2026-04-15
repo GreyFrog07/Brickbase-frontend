@@ -168,7 +168,12 @@ export const PropertyProvider = ({ children }: { children: React.ReactNode }) =>
             realProperties = realProperties.filter(p => serverIdSet.has(p.id));
           }
 
-          return [...tempProperties, ...realProperties];
+          const next = [...tempProperties, ...realProperties];
+          // Persist the merged result so the next boot loads the correct count,
+          // not the stale pre-merge cache. Without this the delta is applied to
+          // in-memory state only and the cache stays at the old number.
+          cacheProperties(user.id, next);
+          return next;
         });
 
         await setLastSyncAt(user.id, serverTime);
