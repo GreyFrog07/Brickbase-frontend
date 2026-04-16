@@ -56,8 +56,9 @@ import { getUserFolder, uploadToStorage } from '../../lib/supabase';
 import { useProperties } from '../../contexts/PropertyContext';
 import { useOrganization } from '../../contexts/OrganizationContext';
 
-const { width: SCREEN_WIDTH } = Dimensions.get('window');
+const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 const MAX_CONTENT_WIDTH = 500;
+const TOP_SPACER_HEIGHT = Math.round(SCREEN_HEIGHT * 0.06);
 
 // India only - fixed country code
 const COUNTRY_CODE = '+91';
@@ -236,6 +237,11 @@ export default function AddPropertyScreen() {
 
   // Organization visibility — null = personal, orgId = shared with org
   const [selectedOrgId, setSelectedOrgId] = useState<string | null>(null);
+
+  // Collapsible form sections — only Essentials open by default
+  const [essentialsExpanded, setEssentialsExpanded] = useState(true);
+  const [specsExpanded, setSpecsExpanded] = useState(false);
+  const [otherExpanded, setOtherExpanded] = useState(false);
 
   // Validation errors
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -1372,6 +1378,26 @@ export default function AddPropertyScreen() {
 
   return (
     <SafeAreaView style={styles.container} edges={['bottom']}>
+        {/* Top safe-area spacer — keeps content below notch/status bar */}
+        <View style={[styles.topSpacer, { paddingTop: insets.top }]}>
+          {isEditMode ? (
+            <TouchableOpacity
+              onPress={() => { resetForm(); router.back(); }}
+              style={styles.topSpacerBtn}
+              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+            >
+              <Ionicons name="close" size={24} color="#fff" />
+            </TouchableOpacity>
+          ) : (
+            <TouchableOpacity
+              onPress={handleRefresh}
+              style={styles.topSpacerBtn}
+              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+            >
+              <Ionicons name="refresh" size={22} color="#fff" />
+            </TouchableOpacity>
+          )}
+        </View>
         <ScrollView
           ref={scrollViewRef}
           style={styles.scrollView}
@@ -1386,95 +1412,90 @@ export default function AddPropertyScreen() {
           automaticallyAdjustKeyboardInsets={true}
         >
           <View style={styles.formContainer}>
-            {/* Header with Refresh button */}
-            <View style={styles.formHeader}>
-              <Text style={styles.formHeaderTitle}>
-                {isEditMode ? 'Edit Property' : 'Add Property'}
-              </Text>
-              {!isEditMode && (
-                <TouchableOpacity onPress={handleRefresh} style={styles.refreshButton}>
-                  <Ionicons name="refresh" size={22} color="#fff" />
-                </TouchableOpacity>
-              )}
-              {isEditMode && (
-                <TouchableOpacity onPress={() => { resetForm(); router.back(); }} style={styles.refreshButton}>
-                  <Ionicons name="close" size={24} color="#fff" />
-                </TouchableOpacity>
-              )}
-            </View>
+            {/* Collapsible: Essentials */}
+            <View style={styles.collapsibleGroup}>
+              <TouchableOpacity
+                style={styles.collapsibleHeader}
+                onPress={() => setEssentialsExpanded(!essentialsExpanded)}
+                activeOpacity={0.7}
+              >
+                <Text style={styles.collapsibleTitle}>Essentials</Text>
+                <Ionicons name={essentialsExpanded ? 'chevron-up' : 'chevron-down'} size={22} color="#fff" />
+              </TouchableOpacity>
+              {essentialsExpanded && (
+                <View style={styles.collapsibleContent}>
 
-            {/* 1. Property Category */}
-            <View style={styles.section}>
-              <Text style={styles.label}>Property Category *</Text>
-              <View style={styles.chipContainer}>
-                {(['Residential', 'Commercial'] as PropertyCategory[]).map((cat) => (
-                  <TouchableOpacity
-                    key={cat}
-                    style={[
-                      styles.chip,
-                      propertyCategory === cat && styles.chipSelected,
-                    ]}
-                    onPress={() => {
-                      setPropertyCategory(cat);
-                      setPropertyType('');
-                      // Clear validation error when category is selected
-                      if (errors.propertyCategory) {
-                        setErrors(prev => ({ ...prev, propertyCategory: '' }));
-                      }
-                    }}
-                  >
-                    <Text
-                      style={[
-                        styles.chipText,
-                        propertyCategory === cat && styles.chipTextSelected,
-                      ]}
-                    >
-                      {cat}
-                    </Text>
-                  </TouchableOpacity>
-                ))}
-              </View>
-              {errors.propertyCategory && (
-                <Text style={styles.errorText}>{errors.propertyCategory}</Text>
-              )}
-            </View>
-
-            {/* 2. Property Type */}
-            {propertyCategory && (
-              <View style={styles.section}>
-                <Text style={styles.label}>Property Type *</Text>
+            {/* 1 + 2. Category & Type — side by side */}
+            <View style={styles.categoryTypeRow}>
+              <View style={[styles.section, styles.categoryTypeCol]}>
+                <Text style={styles.label}>Category *</Text>
                 <View style={styles.chipContainer}>
-                  {getPropertyTypes().map((type) => (
+                  {(['Residential', 'Commercial'] as PropertyCategory[]).map((cat) => (
                     <TouchableOpacity
-                      key={type}
+                      key={cat}
                       style={[
                         styles.chip,
-                        propertyType === type && styles.chipSelected,
+                        propertyCategory === cat && styles.chipSelected,
                       ]}
                       onPress={() => {
-                        setPropertyType(type);
-                        // Clear validation error when type is selected
-                        if (errors.propertyType) {
-                          setErrors(prev => ({ ...prev, propertyType: '' }));
+                        setPropertyCategory(cat);
+                        setPropertyType('');
+                        if (errors.propertyCategory) {
+                          setErrors(prev => ({ ...prev, propertyCategory: '' }));
                         }
                       }}
                     >
                       <Text
                         style={[
                           styles.chipText,
-                          propertyType === type && styles.chipTextSelected,
+                          propertyCategory === cat && styles.chipTextSelected,
                         ]}
                       >
-                        {type}
+                        {cat}
                       </Text>
                     </TouchableOpacity>
                   ))}
                 </View>
-                {errors.propertyType && (
-                  <Text style={styles.errorText}>{errors.propertyType}</Text>
+                {errors.propertyCategory && (
+                  <Text style={styles.errorText}>{errors.propertyCategory}</Text>
                 )}
               </View>
-            )}
+
+              {propertyCategory && (
+                <View style={[styles.section, styles.categoryTypeCol]}>
+                  <Text style={styles.label}>Type *</Text>
+                  <View style={styles.chipContainer}>
+                    {getPropertyTypes().map((type) => (
+                      <TouchableOpacity
+                        key={type}
+                        style={[
+                          styles.chip,
+                          propertyType === type && styles.chipSelected,
+                        ]}
+                        onPress={() => {
+                          setPropertyType(type);
+                          if (errors.propertyType) {
+                            setErrors(prev => ({ ...prev, propertyType: '' }));
+                          }
+                        }}
+                      >
+                        <Text
+                          style={[
+                            styles.chipText,
+                            propertyType === type && styles.chipTextSelected,
+                          ]}
+                        >
+                          {type}
+                        </Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                  {errors.propertyType && (
+                    <Text style={styles.errorText}>{errors.propertyType}</Text>
+                  )}
+                </View>
+              )}
+            </View>
 
             {/* 3. Property Photos & Videos */}
             <View style={styles.section}>
@@ -1668,95 +1689,6 @@ export default function AddPropertyScreen() {
               </TouchableOpacity>
             </View>
 
-            {/* 5. Size/Area */}
-            <View style={styles.section}>
-              <Text style={styles.label}>Size / Area</Text>
-            
-              {sizes.map((size, index) => (
-                <View key={index} style={styles.sizeEntry}>
-                  <View style={styles.sizeRow}>
-                    <Text style={styles.sizeTypeLabel}>{getSizeLabel(size.type)}</Text>
-                    <TouchableOpacity onPress={() => removeSize(index)} style={styles.removeButton}>
-                      <Ionicons name="close-circle" size={20} color="#ff4444" />
-                    </TouchableOpacity>
-                  </View>
-                  <View style={styles.sizeInputRow}>
-                    <TextInput
-                      style={[styles.input, styles.sizeInputCombined]}
-                      placeholder="0"
-                      placeholderTextColor="#666"
-                      value={size.value > 0 ? size.value.toString() : ''}
-                      onChangeText={(text) => updateSize(index, 'value', parseFloat(text) || 0)}
-                      keyboardType="decimal-pad"
-                    />
-                    <TouchableOpacity
-                      style={styles.unitSuffix}
-                      onPress={() => setShowSizeUnitDropdown(showSizeUnitDropdown === index ? null : index)}
-                    >
-                      <Text style={styles.unitSuffixText}>{getSizeUnitLabel(size.unit)}</Text>
-                      <Ionicons name="chevron-down" size={14} color="#999" />
-                    </TouchableOpacity>
-                  </View>
-                  {showSizeUnitDropdown === index && (
-                    <View style={styles.dropdownList}>
-                      {SIZE_UNITS.map((unit) => (
-                        <TouchableOpacity
-                          key={unit.value}
-                          style={[
-                            styles.dropdownItem,
-                            size.unit === unit.value && styles.dropdownItemSelected,
-                          ]}
-                          onPress={() => {
-                            updateSize(index, 'unit', unit.value);
-                            setShowSizeUnitDropdown(null);
-                          }}
-                        >
-                          <Text style={[
-                            styles.dropdownItemText,
-                            size.unit === unit.value && styles.dropdownItemTextSelected,
-                          ]}>
-                            {unit.label}
-                          </Text>
-                        </TouchableOpacity>
-                      ))}
-                    </View>
-                  )}
-                </View>
-              ))}
-
-              <View style={styles.addSizeButtons}>
-                {!sizes.find(s => s.type === 'carpet') && (
-                  <TouchableOpacity
-                    style={styles.addSizeButton}
-                    onPress={() => addSize('carpet')}
-                  >
-                    <Ionicons name="add" size={16} color="#aaa" />
-                    <Text style={styles.addSizeButtonText}>Carpet</Text>
-                  </TouchableOpacity>
-                )}
-                {!sizes.find(s => s.type === 'builtup') && (
-                  <TouchableOpacity
-                    style={styles.addSizeButton}
-                    onPress={() => addSize('builtup')}
-                  >
-                    <Ionicons name="add" size={16} color="#aaa" />
-                    <Text style={styles.addSizeButtonText}>Built-up</Text>
-                  </TouchableOpacity>
-                )}
-                {!sizes.find(s => s.type === 'superbuiltup') && (
-                  <TouchableOpacity
-                    style={styles.addSizeButton}
-                    onPress={() => addSize('superbuiltup')}
-                  >
-                    <Ionicons name="add" size={16} color="#aaa" />
-                    <Text style={styles.addSizeButtonText}>Super Built-up</Text>
-                  </TouchableOpacity>
-                )}
-              </View>
-            </View>
-
-            
-
             {/* 6. Address */}
             <View style={styles.section}>
               <Text style={styles.label}>Address</Text>
@@ -1895,58 +1827,113 @@ export default function AddPropertyScreen() {
                   <Text style={styles.featureText}>Gated</Text>
                 </TouchableOpacity>
 
-                
+
               </View>
             </View>
 
-            {/* 8. Case Type */}
+                </View>
+              )}
+            </View>
+
+            {/* Collapsible: Size, Price & Timing */}
+            <View style={styles.collapsibleGroup}>
+              <TouchableOpacity
+                style={styles.collapsibleHeader}
+                onPress={() => setSpecsExpanded(!specsExpanded)}
+                activeOpacity={0.7}
+              >
+                <Text style={styles.collapsibleTitle}>Size, Price & Timing</Text>
+                <Ionicons name={specsExpanded ? 'chevron-up' : 'chevron-down'} size={22} color="#fff" />
+              </TouchableOpacity>
+              {specsExpanded && (
+                <View style={styles.collapsibleContent}>
+
+            {/* 5. Size/Area */}
             <View style={styles.section}>
-              <Text style={styles.label}>Case Type</Text>
-              <View style={styles.chipContainer}>
-                {CASE_TYPES.map((type) => (
-                  <TouchableOpacity
-                    key={type}
-                    style={[
-                      styles.chip,
-                      caseType === type && styles.chipSelected,
-                    ]}
-                    onPress={() => setCaseType(type)}
-                  >
-                    <Text
-                      style={[
-                        styles.chipText,
-                        caseType === type && styles.chipTextSelected,
-                      ]}
+              <Text style={styles.label}>Size / Area</Text>
+
+              {sizes.map((size, index) => (
+                <View key={index} style={styles.sizeEntry}>
+                  <View style={styles.sizeRow}>
+                    <Text style={styles.sizeTypeLabel}>{getSizeLabel(size.type)}</Text>
+                    <TouchableOpacity onPress={() => removeSize(index)} style={styles.removeButton}>
+                      <Ionicons name="close-circle" size={20} color="#ff4444" />
+                    </TouchableOpacity>
+                  </View>
+                  <View style={styles.sizeInputRow}>
+                    <TextInput
+                      style={[styles.input, styles.sizeInputCombined]}
+                      placeholder="0"
+                      placeholderTextColor="#666"
+                      value={size.value > 0 ? size.value.toString() : ''}
+                      onChangeText={(text) => updateSize(index, 'value', parseFloat(text) || 0)}
+                      keyboardType="decimal-pad"
+                    />
+                    <TouchableOpacity
+                      style={styles.unitSuffix}
+                      onPress={() => setShowSizeUnitDropdown(showSizeUnitDropdown === index ? null : index)}
                     >
-                      {type.replace(/_/g, ' ')}
-                    </Text>
+                      <Text style={styles.unitSuffixText}>{getSizeUnitLabel(size.unit)}</Text>
+                      <Ionicons name="chevron-down" size={14} color="#999" />
+                    </TouchableOpacity>
+                  </View>
+                  {showSizeUnitDropdown === index && (
+                    <View style={styles.dropdownList}>
+                      {SIZE_UNITS.map((unit) => (
+                        <TouchableOpacity
+                          key={unit.value}
+                          style={[
+                            styles.dropdownItem,
+                            size.unit === unit.value && styles.dropdownItemSelected,
+                          ]}
+                          onPress={() => {
+                            updateSize(index, 'unit', unit.value);
+                            setShowSizeUnitDropdown(null);
+                          }}
+                        >
+                          <Text style={[
+                            styles.dropdownItemText,
+                            size.unit === unit.value && styles.dropdownItemTextSelected,
+                          ]}>
+                            {unit.label}
+                          </Text>
+                        </TouchableOpacity>
+                      ))}
+                    </View>
+                  )}
+                </View>
+              ))}
+
+              <View style={styles.addSizeButtons}>
+                {!sizes.find(s => s.type === 'carpet') && (
+                  <TouchableOpacity
+                    style={styles.addSizeButton}
+                    onPress={() => addSize('carpet')}
+                  >
+                    <Ionicons name="add" size={16} color="#aaa" />
+                    <Text style={styles.addSizeButtonText}>Carpet</Text>
                   </TouchableOpacity>
-                ))}
+                )}
+                {!sizes.find(s => s.type === 'builtup') && (
+                  <TouchableOpacity
+                    style={styles.addSizeButton}
+                    onPress={() => addSize('builtup')}
+                  >
+                    <Ionicons name="add" size={16} color="#aaa" />
+                    <Text style={styles.addSizeButtonText}>Built-up</Text>
+                  </TouchableOpacity>
+                )}
+                {!sizes.find(s => s.type === 'superbuiltup') && (
+                  <TouchableOpacity
+                    style={styles.addSizeButton}
+                    onPress={() => addSize('superbuiltup')}
+                  >
+                    <Ionicons name="add" size={16} color="#aaa" />
+                    <Text style={styles.addSizeButtonText}>Super Built-up</Text>
+                  </TouchableOpacity>
+                )}
               </View>
             </View>
-
-            {/* 8.5 BHK (for residential: Builder Floor, Villa/House, Apartment Society) */}
-            {showBhkField && (
-              <View style={styles.section}>
-                <Text style={styles.label}>BHK</Text>
-                <TextInput
-                  ref={bhkRef}
-                  style={[styles.input, { width: 100 }]}
-                  placeholder="e.g. 3"
-                  placeholderTextColor="#666"
-                  value={bhk}
-                  onChangeText={(text) => setBhk(text.replace(/[^0-9]/g, ''))}
-                  keyboardType="numeric"
-                  maxLength={2}
-                  returnKeyType="next"
-                  blurOnSubmit={false}
-                  onSubmitEditing={() => {
-                    if (!needsMultipleFloors) priceRef.current?.focus();
-                    else Keyboard.dismiss();
-                  }}
-                />
-              </View>
-            )}
 
             {/* 9. Price */}
             {needsMultipleFloors ? (
@@ -2040,6 +2027,29 @@ export default function AddPropertyScreen() {
                   onSubmitEditing={() => {
                     if (ageType === 'Resale') propertyAgeRef.current?.focus();
                     else paymentPlanRef.current?.focus();
+                  }}
+                />
+              </View>
+            )}
+
+            {/* 8.5 BHK (for residential: Builder Floor, Villa/House, Apartment Society) */}
+            {showBhkField && (
+              <View style={styles.section}>
+                <Text style={styles.label}>BHK</Text>
+                <TextInput
+                  ref={bhkRef}
+                  style={[styles.input, { width: 100 }]}
+                  placeholder="e.g. 3"
+                  placeholderTextColor="#666"
+                  value={bhk}
+                  onChangeText={(text) => setBhk(text.replace(/[^0-9]/g, ''))}
+                  keyboardType="numeric"
+                  maxLength={2}
+                  returnKeyType="next"
+                  blurOnSubmit={false}
+                  onSubmitEditing={() => {
+                    if (!needsMultipleFloors) priceRef.current?.focus();
+                    else Keyboard.dismiss();
                   }}
                 />
               </View>
@@ -2179,6 +2189,49 @@ export default function AddPropertyScreen() {
             </View>
             )}
 
+                </View>
+              )}
+            </View>
+
+            {/* Collapsible: Additional details */}
+            <View style={styles.collapsibleGroup}>
+              <TouchableOpacity
+                style={styles.collapsibleHeader}
+                onPress={() => setOtherExpanded(!otherExpanded)}
+                activeOpacity={0.7}
+              >
+                <Text style={styles.collapsibleTitle}>Additional details</Text>
+                <Ionicons name={otherExpanded ? 'chevron-up' : 'chevron-down'} size={22} color="#fff" />
+              </TouchableOpacity>
+              {otherExpanded && (
+                <View style={styles.collapsibleContent}>
+
+            {/* 8. Case Type */}
+            <View style={styles.section}>
+              <Text style={styles.label}>Case Type</Text>
+              <View style={styles.chipContainer}>
+                {CASE_TYPES.map((type) => (
+                  <TouchableOpacity
+                    key={type}
+                    style={[
+                      styles.chip,
+                      caseType === type && styles.chipSelected,
+                    ]}
+                    onPress={() => setCaseType(type)}
+                  >
+                    <Text
+                      style={[
+                        styles.chipText,
+                        caseType === type && styles.chipTextSelected,
+                      ]}
+                    >
+                      {type.replace(/_/g, ' ')}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            </View>
+
             {/* Payment Plan */}
             <View style={styles.section}>
               <Text style={styles.label}>Payment Plan</Text>
@@ -2241,6 +2294,10 @@ export default function AddPropertyScreen() {
                 multiline
                 numberOfLines={4}
               />
+            </View>
+
+                </View>
+              )}
             </View>
 
             {/* Organization Visibility (only shown if user is in an org) */}
@@ -2542,6 +2599,21 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#0c0c0c',
   },
+  topSpacer: {
+    backgroundColor: '#000',
+    justifyContent: 'flex-end',
+    alignItems: 'flex-end',
+    paddingHorizontal: 16,
+    paddingBottom: 6,
+  },
+  topSpacerBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: 'rgba(255,255,255,0.08)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
   loadingContainer: {
     flex: 1,
     justifyContent: 'center',
@@ -2582,26 +2654,37 @@ const styles = StyleSheet.create({
     fontSize: 20,
     fontWeight: 'bold',
   },
-  formHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 20,
-    paddingRight: 4,
-  },
-  formHeaderTitle: {
-    color: '#fff',
-    fontSize: 24,
-    fontWeight: 'bold',
-  },
-  refreshButton: {
-    padding: 8,
-  },
   section: {
     marginBottom: 24,
   },
   subSection: {
     marginTop: 16,
+  },
+  collapsibleGroup: {
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: '#2a2a2a',
+    borderRadius: 10,
+    overflow: 'hidden',
+    backgroundColor: '#141414',
+  },
+  collapsibleHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    backgroundColor: '#1c1c1c',
+  },
+  collapsibleTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#fff',
+    letterSpacing: 0.3,
+  },
+  collapsibleContent: {
+    padding: 16,
+    paddingBottom: 0,
   },
   label: {
     fontSize: 16,
@@ -2633,24 +2716,37 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   chip: {
-    backgroundColor: '#1a1a1a',
+    backgroundColor: '#121212',
     borderWidth: 1,
-    borderColor: '#333',
-    borderRadius: 20,
-    paddingHorizontal: 16,
+    borderColor: '#2a2a2a',
+    borderLeftWidth: 3,
+    borderLeftColor: '#2a2a2a',
+    borderRadius: 4,
+    paddingHorizontal: 14,
     paddingVertical: 10,
   },
   chipSelected: {
-    backgroundColor: '#fff',
-    borderColor: '#fff',
+    backgroundColor: 'rgba(0, 217, 163, 0.08)',
+    borderColor: '#00d9a3',
+    borderLeftColor: '#00d9a3',
   },
   chipText: {
-    color: '#fff',
-    fontSize: 14,
+    color: '#cfcfcf',
+    fontSize: 12,
+    fontWeight: '600',
+    letterSpacing: 0.8,
+    textTransform: 'uppercase',
   },
   chipTextSelected: {
-    color: '#000',
-    fontWeight: '600',
+    color: '#00d9a3',
+  },
+  categoryTypeRow: {
+    flexDirection: 'row',
+    gap: 12,
+    marginBottom: 0,
+  },
+  categoryTypeCol: {
+    flex: 1,
   },
   photoButtons: {
     flexDirection: 'row',

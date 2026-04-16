@@ -65,8 +65,10 @@ function GridPropertyCard({
     const phone = property.builders?.[0]?.phoneNumber || property.builderPhone;
     if (!phone) return;
     const code = property.builders?.[0]?.countryCode || "+91";
+    const unitNo = property.address?.unitNo;
+    const msg = `Hello sir can you please share elevation, layout and floor pricing for ${unitNo || 'the property'}`;
     Linking.openURL(
-      `whatsapp://send?phone=${code.replace("+", "")}${phone}`,
+      `whatsapp://send?phone=${code.replace("+", "")}${phone}&text=${encodeURIComponent(msg)}`,
     ).catch(() => Alert.alert("Error", "WhatsApp not installed"));
   };
 

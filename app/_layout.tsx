@@ -5,8 +5,10 @@ import { PropertyProvider } from '../contexts/PropertyContext';
 import { OrganizationProvider } from '../contexts/OrganizationContext';
 import { router } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
+import Insights from 'expo-insights';
 
 SplashScreen.preventAutoHideAsync();
+// Insights.setup(); commi
 
 function RootLayoutNav() {
   const { user, loading } = useAuth();

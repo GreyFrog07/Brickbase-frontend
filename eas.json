@@ -7,20 +7,29 @@
     "development": {
       "developmentClient": true,
       "distribution": "internal",
+      "channel": "development",
       "env": {
-        "EXPO_PUBLIC_BACKEND_URL": "https://brickbase-api.onrender.com"
+        "EXPO_PUBLIC_BACKEND_URL": "https://brickbase-api.onrender.com",
+        "EXPO_PUBLIC_SUPABASE_URL": "https://juwftptimemsmoqxkynm.supabase.co",
+        "EXPO_PUBLIC_SUPABASE_ANON_KEY": "sb_publishable_wgvlWIAeOMB-aZZNs4i6Kg_a8iKNII4"
       }
     },
     "preview": {
       "distribution": "internal",
+      "channel": "preview",
       "env": {
-        "EXPO_PUBLIC_BACKEND_URL": "https://brickbase-api.onrender.com"
+        "EXPO_PUBLIC_BACKEND_URL": "https://brickbase-api.onrender.com",
+        "EXPO_PUBLIC_SUPABASE_URL": "https://juwftptimemsmoqxkynm.supabase.co",
+        "EXPO_PUBLIC_SUPABASE_ANON_KEY": "sb_publishable_wgvlWIAeOMB-aZZNs4i6Kg_a8iKNII4"
       }
     },
     "production": {
       "autoIncrement": true,
+      "channel": "production",
       "env": {
-        "EXPO_PUBLIC_BACKEND_URL": "https://brickbase-api.onrender.com"
+        "EXPO_PUBLIC_BACKEND_URL": "https://brickbase-api.onrender.com",
+        "EXPO_PUBLIC_SUPABASE_URL": "https://juwftptimemsmoqxkynm.supabase.co",
+        "EXPO_PUBLIC_SUPABASE_ANON_KEY": "sb_publishable_wgvlWIAeOMB-aZZNs4i6Kg_a8iKNII4"
       }
     }
   },

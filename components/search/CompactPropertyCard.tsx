@@ -39,12 +39,14 @@ function CompactPropertyCard({ property, onPress, onShare }: CompactPropertyCard
   };
 
   const getLocationInfo = () => {
-    if (!property.address) return null;
+    const a = property.address;
+    if (!a) return null;
     const parts: string[] = [];
-    if (property.address.block) parts.push(`Block ${property.address.block}`);
-    if (property.address.sector) parts.push(`Sector ${property.address.sector}`);
-    if (property.address.area) parts.push(property.address.area);
-    if (property.address.city) parts.push(property.address.city);
+    if (a.unitNo) parts.push(a.unitNo);
+    if (a.block) parts.push(`Block-${a.block}`);
+    if (a.area) parts.push(a.area);
+    if (a.sector) parts.push(`Sector-${a.sector}`);
+    if (a.city) parts.push(a.city);
     return parts.length > 0 ? parts.join(', ') : null;
   };
 
@@ -61,8 +63,10 @@ function CompactPropertyCard({ property, onPress, onShare }: CompactPropertyCard
     const phoneNumber = property.builders?.[0]?.phoneNumber || property.builderPhone;
     if (!phoneNumber) return;
     const countryCode = property.builders?.[0]?.countryCode || '+91';
+    const unitNo = property.address?.unitNo;
+    const msg = `Hello sir can you please share elevation, layout and floor pricing for ${unitNo || 'the property'}`;
     Linking.openURL(
-      `whatsapp://send?phone=${countryCode.replace('+', '')}${phoneNumber}`,
+      `whatsapp://send?phone=${countryCode.replace('+', '')}${phoneNumber}&text=${encodeURIComponent(msg)}`,
     ).catch(() => Alert.alert('Error', 'WhatsApp not installed'));
   };
 

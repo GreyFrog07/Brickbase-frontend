@@ -56,6 +56,7 @@ export default function TabLayout() {
         name="add"
         options={{
           title: 'Add Property',
+          headerShown: false,
           tabBarIcon: ({ color, size }: { color: string; size: number }) => (
             <Ionicons name="add-circle" size={size} color={color} />
           ),

@@ -28,6 +28,69 @@ import { getCachedImageForPath } from '../lib/imageCache';
 
 const { width } = Dimensions.get('window');
 
+const isStorageUri = (p?: string | null) =>
+  !!p && !p.startsWith('file://') && !p.startsWith('http') && !p.startsWith('/');
+
+function PropertyImageMarker({ property, highlighted }: { property: Property; highlighted?: boolean }) {
+  const coverIdx = property.coverPhotoIndex ?? 0;
+  const coverPath = property.coverPhotoPath;
+  const coverPhoto = property.propertyPhotos?.[coverIdx] || property.propertyPhotos?.[0];
+  const hasImage = !!(coverPath || coverPhoto);
+  const borderColor = highlighted ? '#00d9a3' : '#fff';
+  return (
+    <View style={markerStyles.wrap}>
+      <View style={[markerStyles.imageBox, { borderColor }]}>
+        {hasImage ? (
+          <CachedImage
+            storagePath={coverPath || (isStorageUri(coverPhoto) ? coverPhoto : undefined)}
+            bucket={(coverPath || isStorageUri(coverPhoto)) ? 'property-photos' : undefined}
+            uri={!coverPath && !isStorageUri(coverPhoto) ? coverPhoto : undefined}
+            style={markerStyles.image}
+          />
+        ) : (
+          <View style={[markerStyles.image, markerStyles.placeholder]}>
+            <Ionicons name="home" size={18} color="#fff" />
+          </View>
+        )}
+      </View>
+      <View style={[markerStyles.tail, { borderTopColor: borderColor }]} />
+    </View>
+  );
+}
+
+const markerStyles = StyleSheet.create({
+  wrap: {
+    alignItems: 'center',
+  },
+  imageBox: {
+    width: 46,
+    height: 46,
+    borderRadius: 6,
+    borderWidth: 2,
+    backgroundColor: '#222',
+    overflow: 'hidden',
+  },
+  image: {
+    width: '100%',
+    height: '100%',
+  },
+  placeholder: {
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#333',
+  },
+  tail: {
+    width: 0,
+    height: 0,
+    borderLeftWidth: 6,
+    borderRightWidth: 6,
+    borderTopWidth: 8,
+    borderLeftColor: 'transparent',
+    borderRightColor: 'transparent',
+    marginTop: -1,
+  },
+});
+
 export default function PropertyDetailsScreen() {
   const { propertyId } = useLocalSearchParams();
   const insets = useSafeAreaInsets();
@@ -138,7 +201,9 @@ export default function PropertyDetailsScreen() {
     const phoneNumber = property?.builders?.[0]?.phoneNumber || property?.builderPhone;
     if (phoneNumber) {
       const countryCode = (property?.builders?.[0]?.countryCode || '+91').replace('+', '');
-      Linking.openURL(`https://wa.me/${countryCode}${phoneNumber}`);
+      const unitNo = property?.address?.unitNo;
+      const msg = `Hello sir can you please share elevation, layout and floor pricing for ${unitNo || 'the property'}`;
+      Linking.openURL(`https://wa.me/${countryCode}${phoneNumber}?text=${encodeURIComponent(msg)}`);
     } else {
       Alert.alert('No Phone Number', 'Builder phone number not available');
     }
@@ -176,6 +241,17 @@ export default function PropertyDetailsScreen() {
   const getInitials = (email?: string) => {
     if (!email) return '?';
     return email.charAt(0).toUpperCase();
+  };
+
+  const formatAddress = (addr?: Property['address']) => {
+    if (!addr) return null;
+    const parts: string[] = [];
+    if (addr.unitNo) parts.push(addr.unitNo);
+    if (addr.block) parts.push(`Block-${addr.block}`);
+    if (addr.area) parts.push(addr.area);
+    if (addr.sector) parts.push(`Sector-${addr.sector}`);
+    if (addr.city) parts.push(addr.city);
+    return parts.length > 0 ? parts.join(', ') : null;
   };
 
   const fetchNearbyProperties = () => {
@@ -339,62 +415,64 @@ export default function PropertyDetailsScreen() {
 
         {/* Property Details */}
         <View style={styles.content}>
-          {/* Header with Actions - NO DELETE ICON */}
-          <View style={styles.header}>
-            <View style={styles.headerLeft}>
-              <View style={styles.categoryBadge}>
-                <Text style={styles.categoryText}>{property.propertyCategory || 'Property'}</Text>
-              </View>
-              <Text style={styles.propertyType}>{property.propertyType || 'Property'}</Text>
-              
-              {/* Show single price only if not multi-floor */}
-              {!hasMultipleFloors && (
-                <Text style={styles.price}>{formatPrice(property.price, property.priceUnit)}</Text>
-              )}
-              
-              {/* Posted By */}
-              {property.userEmail && (
-                <View style={styles.postedBySection}>
-                  <Text style={styles.postedByLabel}>Posted by</Text>
-                  <View style={styles.userInfo}>
-                    <View style={styles.avatar}>
-                      <Text style={styles.avatarText}>{getInitials(property.userEmail)}</Text>
+          {/* Compact info block — address + price + features replace category/type */}
+          <View style={styles.infoBlock}>
+            <View style={styles.infoRow}>
+              <View style={styles.headerLeft}>
+                {formatAddress(property.address) && (
+                  <Text style={styles.addressText}>{formatAddress(property.address)}</Text>
+                )}
+                {!hasMultipleFloors && property.price != null && (
+                  <Text style={styles.price}>{formatPrice(property.price, property.priceUnit)}</Text>
+                )}
+                {property.userEmail && (
+                  <View style={styles.postedByInline}>
+                    <View style={styles.avatarSmall}>
+                      <Text style={styles.avatarSmallText}>{getInitials(property.userEmail)}</Text>
                     </View>
-                    <Text style={styles.userName}>{property.userEmail.split('@')[0]}</Text>
+                    <Text style={styles.userNameSmall}>{property.userEmail.split('@')[0]}</Text>
                   </View>
-                </View>
-              )}
+                )}
+              </View>
+              <View style={styles.headerActions}>
+                <TouchableOpacity style={styles.actionButton} onPress={() => setShowShareModal(true)}>
+                  <Ionicons name="share-social" size={20} color="#4CAF50" />
+                </TouchableOpacity>
+                <TouchableOpacity style={styles.actionButton} onPress={handleEdit}>
+                  <Ionicons name="create-outline" size={20} color="#fff" />
+                </TouchableOpacity>
+              </View>
             </View>
-            <View style={styles.headerActions}>
-              <TouchableOpacity style={styles.actionButton} onPress={() => setShowShareModal(true)}>
-                <Ionicons name="share-social" size={22} color="#4CAF50" />
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.actionButton} onPress={handleEdit}>
-                <Ionicons name="create-outline" size={22} color="#fff" />
-              </TouchableOpacity>
-              {/* DELETE ICON REMOVED FROM HERE */}
-            </View>
+
+            {features.length > 0 && (
+              <View style={styles.featuresRow}>
+                {features.map((feature, index) => (
+                  <View key={index} style={styles.featurePill}>
+                    <Ionicons name={feature.icon as any} size={13} color="#aaa" />
+                    <Text style={styles.featurePillText}>{feature.text}</Text>
+                  </View>
+                ))}
+              </View>
+            )}
           </View>
 
-          {/* Floor Prices (for multi-floor properties) */}
+          {/* Floors & Pricing — horizontal table, 4 per row */}
           {hasMultipleFloors && (
-            <View style={styles.section}>
-              <Text style={styles.sectionTitle}>Floors & Pricing</Text>
-              {property.floors!.map((floor, index) => (
-                <View key={index} style={styles.floorItem}>
-                  <View style={styles.floorInfo}>
-                    <Text style={styles.floorNumber}>Floor {floor.floorNumber}</Text>
-                    <Text style={styles.floorPrice}>{formatFloorPrice(floor)}</Text>
+            <View style={styles.compactSection}>
+              <View style={styles.floorTable}>
+                {property.floors!.map((floor, index) => (
+                  <View key={index} style={styles.floorCell}>
+                    <Text style={styles.floorCellNumber}>F{floor.floorNumber}{floor.tower ? ` · ${floor.tower}` : ''}</Text>
+                    <Text style={styles.floorCellPrice}>{formatFloorPrice(floor)}</Text>
                   </View>
-                </View>
-              ))}
+                ))}
+              </View>
             </View>
           )}
 
-          {/* Builder Section - all builders with inline buttons */}
+          {/* Builder Section */}
           {hasBuilder && (
             <View style={styles.callBuilderSection}>
-              <Text style={styles.builderLabel}>Builders</Text>
               {allBuilders.map((builder, idx) => (
                 <View key={idx} style={styles.builderRow}>
                   <Text style={styles.builderName} numberOfLines={1}>{builder.name}</Text>
@@ -412,7 +490,11 @@ export default function PropertyDetailsScreen() {
                       style={[styles.builderActionBtn, !builder.phone && styles.builderActionBtnDisabled]}
                       disabled={!builder.phone}
                       onPress={() => {
-                        if (builder.phone) Linking.openURL(`https://wa.me/91${builder.phone}`);
+                        if (builder.phone) {
+                          const unitNo = property.address?.unitNo;
+                          const msg = `Hello sir can you please share elevation, layout and floor pricing for ${unitNo || 'the property'}`;
+                          Linking.openURL(`https://wa.me/91${builder.phone}?text=${encodeURIComponent(msg)}`);
+                        }
                       }}
                     >
                       <Ionicons name="logo-whatsapp" size={16} color={builder.phone ? '#fff' : '#555'} />
@@ -423,38 +505,9 @@ export default function PropertyDetailsScreen() {
             </View>
           )}
 
-          {/* Address */}
-          {property.address && (property.address.unitNo || property.address.block || property.address.sector || property.address.area || property.address.city) && (
-            <View style={styles.section}>
-              <Text style={styles.sectionTitle}>Address</Text>
-              <View style={styles.addressCard}>
-                {(property.address.unitNo || property.address.block) && (
-                  <Text style={styles.addressLine}>
-                    {property.address.unitNo && `${property.address.unitNo}`}
-                    {property.address.unitNo && property.address.block && ', '}
-                    {property.address.block && `Block ${property.address.block}`}
-                  </Text>
-                )}
-                {property.address.sector && (
-                  <Text style={styles.addressLine}>
-                    Sector-{property.address.sector}
-                  </Text>
-                )}
-                {(property.address.area || property.address.city) && (
-                  <Text style={styles.addressLine}>
-                    {property.address.area}
-                    {property.address.area && property.address.city && ', '}
-                    {property.address.city}
-                  </Text>
-                )}
-              </View>
-            </View>
-          )}
-
-          {/* Size/Area */}
+          {/* Size/Area — no heading */}
           {property.sizes && property.sizes.length > 0 && (
-            <View style={styles.section}>
-              <Text style={styles.sectionTitle}>Size / Area</Text>
+            <View style={styles.compactSection}>
               <View style={styles.sizesGrid}>
                 {property.sizes.map((size, index) => (
                   <View key={index} style={styles.sizeItem}>
@@ -468,53 +521,39 @@ export default function PropertyDetailsScreen() {
             </View>
           )}
 
-          {/* Features */}
-          {features.length > 0 && (
-            <View style={styles.section}>
-              <Text style={styles.sectionTitle}>Features</Text>
-              <View style={styles.featuresGrid}>
-                {features.map((feature, index) => (
-                  <View key={index} style={styles.featureItem}>
-                    <Ionicons name={feature.icon as any} size={24} color="#fff" />
-                    <Text style={styles.featureText}>{feature.text}</Text>
+          {/* Details — no heading, inline pills */}
+          {(property.ageType || property.propertyAge != null || property.case || (property.floor != null && !hasMultipleFloors)) && (
+            <View style={styles.compactSection}>
+              <View style={styles.detailsGrid}>
+                {property.ageType && (
+                  <View style={styles.detailItem}>
+                    <Text style={styles.detailLabel}>Age Type</Text>
+                    <Text style={styles.detailValue}>
+                      {property.ageType === 'UnderConstruction' ? 'Under Construction' : property.ageType}
+                    </Text>
                   </View>
-                ))}
+                )}
+                {property.propertyAge != null && (
+                  <View style={styles.detailItem}>
+                    <Text style={styles.detailLabel}>Property Age</Text>
+                    <Text style={styles.detailValue}>{property.propertyAge} years</Text>
+                  </View>
+                )}
+                {property.case && (
+                  <View style={styles.detailItem}>
+                    <Text style={styles.detailLabel}>Case Type</Text>
+                    <Text style={styles.detailValue}>{property.case.replace(/_/g, ' ')}</Text>
+                  </View>
+                )}
+                {property.floor != null && !hasMultipleFloors && (
+                  <View style={styles.detailItem}>
+                    <Text style={styles.detailLabel}>Floor</Text>
+                    <Text style={styles.detailValue}>{property.floor}</Text>
+                  </View>
+                )}
               </View>
             </View>
           )}
-
-          {/* Details Grid */}
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Details</Text>
-            <View style={styles.detailsGrid}>
-              {property.ageType && (
-                <View style={styles.detailItem}>
-                  <Text style={styles.detailLabel}>Age Type</Text>
-                  <Text style={styles.detailValue}>
-                    {property.ageType === 'UnderConstruction' ? 'Under Construction' : property.ageType}
-                  </Text>
-                </View>
-              )}
-              {property.propertyAge != null && (
-                <View style={styles.detailItem}>
-                  <Text style={styles.detailLabel}>Property Age</Text>
-                  <Text style={styles.detailValue}>{property.propertyAge} years</Text>
-                </View>
-              )}
-              {property.case && (
-                <View style={styles.detailItem}>
-                  <Text style={styles.detailLabel}>Case Type</Text>
-                  <Text style={styles.detailValue}>{property.case.replace(/_/g, ' ')}</Text>
-                </View>
-              )}
-              {property.floor != null && !hasMultipleFloors && (
-                <View style={styles.detailItem}>
-                  <Text style={styles.detailLabel}>Floor</Text>
-                  <Text style={styles.detailValue}>{property.floor}</Text>
-                </View>
-              )}
-            </View>
-          </View>
 
           {/* Payment Plan */}
           {property.paymentPlan && (
@@ -596,7 +635,7 @@ export default function PropertyDetailsScreen() {
                 {Platform.OS !== 'web' ? (
                   <MapView
                     style={styles.mapPreview}
-                    provider={PROVIDER_GOOGLE}
+                    provider={Platform.OS === 'ios' ? undefined : PROVIDER_GOOGLE}
                     initialRegion={{
                       latitude: property.latitude,
                       longitude: property.longitude,
@@ -614,7 +653,10 @@ export default function PropertyDetailsScreen() {
                         latitude: property.latitude,
                         longitude: property.longitude,
                       }}
-                    />
+                      tracksViewChanges={false}
+                    >
+                      <PropertyImageMarker property={property} />
+                    </Marker>
                   </MapView>
                 ) : (
                   <View style={[styles.mapPreview, { justifyContent: 'center', alignItems: 'center', backgroundColor: '#222' }]}>
@@ -667,7 +709,7 @@ export default function PropertyDetailsScreen() {
             {Platform.OS !== 'web' ? (
               <MapView
                 style={StyleSheet.absoluteFillObject}
-                provider={PROVIDER_GOOGLE}
+                provider={Platform.OS === 'ios' ? undefined : PROVIDER_GOOGLE}
                 initialRegion={{
                   latitude: property.latitude,
                   longitude: property.longitude,
@@ -680,10 +722,12 @@ export default function PropertyDetailsScreen() {
                     latitude: property.latitude,
                     longitude: property.longitude,
                   }}
-                  pinColor="#ff4444"
                   title={property.propertyType || 'Property'}
                   description={formatPrice(property.price, property.priceUnit)}
-                />
+                  tracksViewChanges={false}
+                >
+                  <PropertyImageMarker property={property} highlighted />
+                </Marker>
                 {nearbyProperties.map(np => (
                   <Marker
                     key={np.id}
@@ -691,15 +735,17 @@ export default function PropertyDetailsScreen() {
                       latitude: np.latitude!,
                       longitude: np.longitude!,
                     }}
-                    pinColor="#4CAF50"
                     title={np.propertyType || 'Property'}
                     description={formatPrice(np.price, np.priceUnit)}
+                    tracksViewChanges={false}
                     onCalloutPress={() => {
                       setShowMapModal(false);
                       setNearbyProperties([]);
                       router.push({ pathname: '/property-details', params: { propertyId: np.id } });
                     }}
-                  />
+                  >
+                    <PropertyImageMarker property={np} />
+                  </Marker>
                 ))}
               </MapView>
             ) : (
@@ -866,6 +912,98 @@ const styles = StyleSheet.create({
   },
   content: {
     padding: 16,
+  },
+  infoBlock: {
+    marginBottom: 16,
+    paddingBottom: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#1f1f1f',
+  },
+  infoRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+  },
+  addressText: {
+    color: '#fff',
+    fontSize: 15,
+    lineHeight: 21,
+    marginBottom: 6,
+  },
+  postedByInline: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginTop: 8,
+  },
+  avatarSmall: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    backgroundColor: '#2a2a2a',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  avatarSmallText: {
+    color: '#fff',
+    fontSize: 11,
+    fontWeight: '600',
+  },
+  userNameSmall: {
+    color: '#999',
+    fontSize: 12,
+  },
+  featuresRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+    marginTop: 10,
+  },
+  featurePill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: '#1a1a1a',
+    paddingHorizontal: 9,
+    paddingVertical: 5,
+    borderRadius: 4,
+    borderWidth: 0.5,
+    borderColor: '#2a2a2a',
+  },
+  featurePillText: {
+    color: '#bbb',
+    fontSize: 11,
+    fontWeight: '500',
+  },
+  compactSection: {
+    marginBottom: 16,
+  },
+  floorTable: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  floorCell: {
+    width: (width - 32 - 24) / 4,
+    backgroundColor: '#1a1a1a',
+    borderRadius: 8,
+    paddingVertical: 10,
+    paddingHorizontal: 6,
+    alignItems: 'center',
+    borderWidth: 0.5,
+    borderColor: '#2a2a2a',
+  },
+  floorCellNumber: {
+    color: '#999',
+    fontSize: 11,
+    fontWeight: '600',
+    marginBottom: 3,
+  },
+  floorCellPrice: {
+    color: '#fff',
+    fontSize: 12,
+    fontWeight: '700',
+    textAlign: 'center',
   },
   header: {
     flexDirection: 'row',

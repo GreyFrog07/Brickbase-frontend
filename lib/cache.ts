@@ -31,6 +31,25 @@ export const setLastSyncAt = async (userId: string, serverTime: string): Promise
   }
 };
 
+// ── Atomic sync checkpoint (cache + lastSyncAt in one write) ──────────
+
+export const persistSyncCheckpoint = async (
+  userId: string,
+  properties: Property[],
+  serverTime: string,
+): Promise<void> => {
+  try {
+    const confirmed = properties.filter(p => !p.id.startsWith('temp_'));
+    await AsyncStorage.multiSet([
+      [CACHE_KEYS.PROPERTIES(userId), JSON.stringify(confirmed)],
+      [CACHE_KEYS.PROPERTIES_TIMESTAMP(userId), Date.now().toString()],
+      [CACHE_KEYS.LAST_SYNC_AT(userId), serverTime],
+    ]);
+  } catch (error) {
+    console.error('Error persisting sync checkpoint:', error);
+  }
+};
+
 // ── Property cache (per-user) ──────────────────────────────────────────
 
 export const cacheProperties = async (userId: string, properties: Property[]): Promise<void> => {

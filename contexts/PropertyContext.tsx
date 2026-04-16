@@ -4,6 +4,7 @@ import { Property } from '../types/property';
 import {
   getCachedProperties,
   cacheProperties,
+  persistSyncCheckpoint,
   getPendingQueue,
   removeFromPendingQueue,
   updatePendingStatus,
@@ -60,6 +61,8 @@ export const PropertyProvider = ({ children }: { children: React.ReactNode }) =>
   const syncInProgress = useRef(false);
   // Flag set by updatePropertyInState to trigger an immediate cache flush
   const immediateFlushRef = useRef(false);
+  // Prevents the debounced cache effect from racing with atomic sync writes
+  const syncCacheWriteInProgress = useRef(false);
 
   // Load properties when user logs in, clear when they log out
   useEffect(() => {
@@ -76,7 +79,7 @@ export const PropertyProvider = ({ children }: { children: React.ReactNode }) =>
   // If an immediate flush was requested (e.g. after updatePropertyInState), skip the debounce.
   const cacheTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
-    if (!initialLoadDone.current || !user) return;
+    if (!initialLoadDone.current || !user || syncCacheWriteInProgress.current) return;
 
     if (immediateFlushRef.current) {
       immediateFlushRef.current = false;
@@ -153,13 +156,48 @@ export const PropertyProvider = ({ children }: { children: React.ReactNode }) =>
         });
         const { properties: serverDelta, serverTime, allIds } = response.data;
 
+        // ── Self-healing: detect properties in allIds missing from local + delta ──
+        // Read current cache to find IDs the delta didn't cover
+        let additionalProperties: Property[] = [];
+        if (allIds) {
+          const currentCached = await getCachedProperties(user.id) || [];
+          const localIdSet = new Set(currentCached.map((p: Property) => p.id));
+          const deltaIdSet = new Set((serverDelta || []).map((p: Property) => p.id));
+          const missingIds: string[] = allIds.filter(
+            (id: string) => !localIdSet.has(id) && !deltaIdSet.has(id)
+          );
+
+          if (missingIds.length > 0 && missingIds.length <= 50) {
+            // Fetch missing via batch endpoint (unsigned, same format as sync)
+            try {
+              const batchResp = await api.post('/properties/batch', { ids: missingIds });
+              additionalProperties = batchResp.data.properties || [];
+              console.log(`Self-heal: fetched ${additionalProperties.length} missing properties`);
+            } catch (e) {
+              console.error('Failed to fetch missing properties:', e);
+            }
+          } else if (missingIds.length > 50) {
+            // Too many missing — force full paginated resync
+            console.warn(`${missingIds.length} properties missing, starting full resync`);
+            await setLastSyncAt(user.id, '');
+            // Release lock so the recursive call can proceed, then await it
+            syncInProgress.current = false;
+            await syncFromServer(showLoading);
+            return; // finally block runs but is harmless (values already reset)
+          }
+        }
+
+        // ── Merge delta + additionally-fetched properties into state ──
+        const allDelta = [...(serverDelta || []), ...additionalProperties];
+        let mergedSnapshot: Property[] = [];
+
         setProperties(prev => {
           const tempProperties = prev.filter(p => p.id.startsWith('temp_'));
           let realProperties = prev.filter(p => !p.id.startsWith('temp_'));
 
           // 1. Merge changed/new properties (timestamp guard keeps local if it's newer)
-          if (serverDelta && serverDelta.length > 0) {
-            realProperties = mergeServerProperties(realProperties, serverDelta);
+          if (allDelta.length > 0) {
+            realProperties = mergeServerProperties(realProperties, allDelta);
           }
 
           // 2. Remove properties deleted on server (ID reconciliation)
@@ -169,14 +207,15 @@ export const PropertyProvider = ({ children }: { children: React.ReactNode }) =>
           }
 
           const next = [...tempProperties, ...realProperties];
-          // Persist the merged result so the next boot loads the correct count,
-          // not the stale pre-merge cache. Without this the delta is applied to
-          // in-memory state only and the cache stays at the old number.
-          cacheProperties(user.id, next);
+          mergedSnapshot = next;
           return next;
         });
 
-        await setLastSyncAt(user.id, serverTime);
+        // Atomic persist: cache + lastSyncAt written together via multiSet.
+        // Prevents the race where lastSyncAt advances but cache stays stale.
+        syncCacheWriteInProgress.current = true;
+        await persistSyncCheckpoint(user.id, mergedSnapshot, serverTime);
+        syncCacheWriteInProgress.current = false;
       } else {
         // Initial sync: paginated fetch for new device / first login
         // Render each page as it arrives so the user sees properties immediately
@@ -215,15 +254,18 @@ export const PropertyProvider = ({ children }: { children: React.ReactNode }) =>
           }
         }
 
-        // Write cache first, then lastSyncAt — both must succeed before the app
-        // is considered fully synced. If killed here, the next boot detects
-        // lastSyncAt=null (or the crash-recovery guard resets it) and re-syncs fully.
-        setProperties(prev => {
-          cacheProperties(user.id, prev);
-          return prev;
-        });
+        // Atomic persist: cache + lastSyncAt written together via multiSet.
+        // If killed here, the next boot detects lastSyncAt=null (or the
+        // crash-recovery guard resets it) and re-syncs fully.
         if (firstPageServerTime) {
-          await setLastSyncAt(user.id, firstPageServerTime);
+          let paginatedSnapshot: Property[] = [];
+          setProperties(prev => {
+            paginatedSnapshot = prev;
+            return prev;
+          });
+          syncCacheWriteInProgress.current = true;
+          await persistSyncCheckpoint(user.id, paginatedSnapshot, firstPageServerTime);
+          syncCacheWriteInProgress.current = false;
         }
       }
 
@@ -359,11 +401,11 @@ export const PropertyProvider = ({ children }: { children: React.ReactNode }) =>
 
   // --- Server sync methods ---
 
-  const refreshProperties = useCallback(async () => {
+  const refreshProperties = async () => {
     await syncFromServer(false);
-  }, [user]);
+  };
 
-  const onRefresh = useCallback(async () => {
+  const onRefresh = async () => {
     setRefreshing(true);
     try {
       await processPendingQueue();
@@ -374,7 +416,7 @@ export const PropertyProvider = ({ children }: { children: React.ReactNode }) =>
     } finally {
       setRefreshing(false);
     }
-  }, [user]);
+  };
 
   return (
     <PropertyContext.Provider value={{
