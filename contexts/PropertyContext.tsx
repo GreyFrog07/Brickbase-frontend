@@ -156,31 +156,52 @@ export const PropertyProvider = ({ children }: { children: React.ReactNode }) =>
         });
         const { properties: serverDelta, serverTime, allIds } = response.data;
 
-        // ── Self-healing: detect properties in allIds missing from local + delta ──
-        // Read current cache to find IDs the delta didn't cover
+        // ── Self-healing: detect missing OR stale properties ──────────────
+        // allIds is now [{id, updatedAt}] — compare both existence and freshness
         let additionalProperties: Property[] = [];
+        // Build a set of server IDs for deletion reconciliation later
+        const serverIdSet = new Set<string>();
         if (allIds) {
           const currentCached = await getCachedProperties(user.id) || [];
-          const localIdSet = new Set(currentCached.map((p: Property) => p.id));
-          const deltaIdSet = new Set((serverDelta || []).map((p: Property) => p.id));
-          const missingIds: string[] = allIds.filter(
-            (id: string) => !localIdSet.has(id) && !deltaIdSet.has(id)
+          const localPropMap = new Map(
+            currentCached.map((p: Property) => [p.id, p.updatedAt || ''])
           );
+          const deltaIdSet = new Set((serverDelta || []).map((p: Property) => p.id));
+          const staleOrMissingIds: string[] = [];
 
-          if (missingIds.length > 0 && missingIds.length <= 50) {
-            // Fetch missing via batch endpoint (unsigned, same format as sync)
-            try {
-              const batchResp = await api.post('/properties/batch', { ids: missingIds });
-              additionalProperties = batchResp.data.properties || [];
-              console.log(`Self-heal: fetched ${additionalProperties.length} missing properties`);
-            } catch (e) {
-              console.error('Failed to fetch missing properties:', e);
+          for (const entry of allIds) {
+            const serverId = entry.id;
+            const serverUpdatedAt = entry.updatedAt || '';
+            serverIdSet.add(serverId);
+
+            // Skip if already in the delta (will be merged normally)
+            if (deltaIdSet.has(serverId)) continue;
+
+            const localUpdatedAt = localPropMap.get(serverId);
+            if (localUpdatedAt === undefined) {
+              // Missing property — not in local cache at all
+              staleOrMissingIds.push(serverId);
+            } else if (serverUpdatedAt && localUpdatedAt) {
+              // Stale property — server version is newer than local
+              if (new Date(serverUpdatedAt).getTime() > new Date(localUpdatedAt).getTime()) {
+                staleOrMissingIds.push(serverId);
+              }
             }
-          } else if (missingIds.length > 50) {
-            // Too many missing — force full paginated resync
-            console.warn(`${missingIds.length} properties missing, starting full resync`);
+          }
+
+          if (staleOrMissingIds.length > 0 && staleOrMissingIds.length <= 50) {
+            // Fetch missing/stale via batch endpoint (unsigned, same format as sync)
+            try {
+              const batchResp = await api.post('/properties/batch', { ids: staleOrMissingIds });
+              additionalProperties = batchResp.data.properties || [];
+              console.log(`Self-heal: fetched ${additionalProperties.length} missing/stale properties`);
+            } catch (e) {
+              console.error('Failed to fetch missing/stale properties:', e);
+            }
+          } else if (staleOrMissingIds.length > 50) {
+            // Too many out of sync — force full paginated resync
+            console.warn(`${staleOrMissingIds.length} properties out of sync, starting full resync`);
             await setLastSyncAt(user.id, '');
-            // Release lock so the recursive call can proceed, then await it
             syncInProgress.current = false;
             await syncFromServer(showLoading);
             return; // finally block runs but is harmless (values already reset)
@@ -201,8 +222,7 @@ export const PropertyProvider = ({ children }: { children: React.ReactNode }) =>
           }
 
           // 2. Remove properties deleted on server (ID reconciliation)
-          if (allIds) {
-            const serverIdSet = new Set<string>(allIds);
+          if (serverIdSet.size > 0) {
             realProperties = realProperties.filter(p => serverIdSet.has(p.id));
           }
 
