@@ -183,6 +183,23 @@ export const updatePendingStatus = async (
   }
 };
 
+export const updatePendingData = async (
+  userId: string,
+  pendingId: string,
+  data: any,
+): Promise<void> => {
+  try {
+    const queue = await getPendingQueue(userId);
+    const index = queue.findIndex(p => p.id === pendingId);
+    if (index !== -1) {
+      queue[index].data = data;
+      await AsyncStorage.setItem(CACHE_KEYS.PENDING_PROPERTIES(userId), JSON.stringify(queue));
+    }
+  } catch (error) {
+    console.error('Error updating pending data:', error);
+  }
+};
+
 export const removeFromPendingQueue = async (userId: string, pendingId: string): Promise<void> => {
   try {
     const queue = await getPendingQueue(userId);

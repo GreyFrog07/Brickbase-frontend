@@ -157,11 +157,12 @@ export const PropertyProvider = ({ children }: { children: React.ReactNode }) =>
         const { properties: serverDelta, serverTime, allIds } = response.data;
 
         // ── Self-healing: detect missing OR stale properties ──────────────
-        // allIds is now [{id, updatedAt}] — compare both existence and freshness
+        // allIds is [{id, updatedAt}] — compare both existence and freshness.
+        // Backward compat: if allIds is [string] (old backend), treat as ID-only.
         let additionalProperties: Property[] = [];
-        // Build a set of server IDs for deletion reconciliation later
         const serverIdSet = new Set<string>();
-        if (allIds) {
+        if (allIds && allIds.length > 0) {
+          const isNewFormat = typeof allIds[0] === 'object';
           const currentCached = await getCachedProperties(user.id) || [];
           const localPropMap = new Map(
             currentCached.map((p: Property) => [p.id, p.updatedAt || ''])
@@ -170,8 +171,9 @@ export const PropertyProvider = ({ children }: { children: React.ReactNode }) =>
           const staleOrMissingIds: string[] = [];
 
           for (const entry of allIds) {
-            const serverId = entry.id;
-            const serverUpdatedAt = entry.updatedAt || '';
+            // Handle both old format (string) and new format ({id, updatedAt})
+            const serverId = isNewFormat ? entry.id : entry;
+            const serverUpdatedAt = isNewFormat ? (entry.updatedAt || '') : '';
             serverIdSet.add(serverId);
 
             // Skip if already in the delta (will be merged normally)
@@ -181,9 +183,9 @@ export const PropertyProvider = ({ children }: { children: React.ReactNode }) =>
             if (localUpdatedAt === undefined) {
               // Missing property — not in local cache at all
               staleOrMissingIds.push(serverId);
-            } else if (serverUpdatedAt && localUpdatedAt) {
-              // Stale property — server version is newer than local
-              if (new Date(serverUpdatedAt).getTime() > new Date(localUpdatedAt).getTime()) {
+            } else if (serverUpdatedAt) {
+              // Server has a timestamp — check if local is stale or has no timestamp
+              if (!localUpdatedAt || new Date(serverUpdatedAt).getTime() > new Date(localUpdatedAt).getTime()) {
                 staleOrMissingIds.push(serverId);
               }
             }

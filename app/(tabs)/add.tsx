@@ -50,7 +50,7 @@ import {
 } from '../../types/property';
 import { useLocalSearchParams, router, useFocusEffect } from 'expo-router';
 import api from '../../lib/api';
-import { addToPendingQueue, addToPendingUpdates } from '../../lib/cache';
+import { addToPendingQueue, addToPendingUpdates, updatePendingData, removeFromPendingQueue } from '../../lib/cache';
 import { cacheLocalImage } from '../../lib/imageCache';
 import { getUserFolder, uploadToStorage } from '../../lib/supabase';
 import { useProperties } from '../../contexts/PropertyContext';
@@ -1183,6 +1183,25 @@ export default function AddPropertyScreen() {
 
       addPropertyToState(tempProperty);
 
+      // Write-ahead: save to pending queue IMMEDIATELY so the data survives a crash.
+      // Media paths are empty now — updated after upload. Even if the app dies before
+      // upload, the text data (builder, address, etc.) reaches the server on retry.
+      let pendingId: string | null = null;
+      if (user) {
+        try {
+          pendingId = await addToPendingQueue(user.id, {
+            ...basePropertyData,
+            id: propertyId,
+            propertyPhotos: [],
+            propertyVideos: [],
+            importantFiles: [],
+            _tempId: tempId,
+          });
+        } catch (e) {
+          console.error('Failed to write pending queue:', e);
+        }
+      }
+
       Alert.alert('Success', 'Property added!', [
         { text: 'OK', onPress: async () => {
           await clearFormDraft();
@@ -1198,17 +1217,19 @@ export default function AddPropertyScreen() {
       const propFolder = buildPropertyFolder(propertyId);
 
       // Upload media + sync entirely in background — pass the pre-generated property ID
-      uploadAndSyncInBackground(tempId, propertyId, basePropertyData, localPhotos, `${userFolder}/${propFolder}`);
+      uploadAndSyncInBackground(tempId, propertyId, basePropertyData, localPhotos, `${userFolder}/${propFolder}`, pendingId);
     }
   };
 
   // Full background pipeline: upload media → create on server → replace temp property
+  // pendingId: write-ahead queue item created before this function — removed on success.
   const uploadAndSyncInBackground = async (
     tempId: string,
     propertyId: string,
     baseData: any,
     localPhotos: { uri: string; isNew: boolean }[],
     targetFolder: string,
+    pendingId: string | null,
   ) => {
     let photoUrls: string[] = [];
     let videoUrls: string[] = [];
@@ -1229,7 +1250,8 @@ export default function AddPropertyScreen() {
         }
       });
 
-      // 3. Create property on server with pre-generated ID (retry once on network error)
+      // 3. Update the write-ahead queue item with uploaded media paths
+      //    so a crash between here and the POST still retains media.
       const propertyData = {
         ...baseData,
         id: propertyId,
@@ -1237,7 +1259,11 @@ export default function AddPropertyScreen() {
         propertyVideos: videoUrls,
         importantFiles: uploadedFiles,
       };
+      if (pendingId && user) {
+        await updatePendingData(user.id, pendingId, { ...propertyData, _tempId: tempId });
+      }
 
+      // 4. Create property on server with pre-generated ID (retry once on network error)
       let response;
       try {
         response = await api.post('/properties', propertyData);
@@ -1250,11 +1276,17 @@ export default function AddPropertyScreen() {
         }
       }
 
+      // 5. Success — remove from pending queue and replace temp property
+      if (pendingId && user) {
+        await removeFromPendingQueue(user.id, pendingId);
+      }
       replacePropertyInState(tempId, response.data);
       console.log('Property uploaded and synced successfully');
     } catch (error: any) {
       console.error('Background upload+sync failed:', error);
-      if (user) {
+      // Write-ahead item already in queue (with media paths if upload succeeded).
+      // If no write-ahead item (shouldn't happen), create one as fallback.
+      if (!pendingId && user) {
         await addToPendingQueue(user.id, {
           ...baseData,
           id: propertyId,
